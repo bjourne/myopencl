@@ -180,6 +180,18 @@ so.clEnqueueWriteBuffer.argtypes = [
     POINTER(cl_event),
 ]
 
+so.clEnqueueReadBuffer.restype = cl_int
+so.clEnqueueReadBuffer.argtypes = [
+    cl_command_queue,
+    cl_mem,
+    cl_bool,
+    c_size_t, c_size_t,
+    c_void_p,
+    cl_uint,
+    POINTER(cl_event),
+    POINTER(cl_event),
+]
+
 so.clFlush.restype = cl_int
 so.clFlush.argtypes = [cl_command_queue]
 
@@ -412,6 +424,9 @@ class DeviceType(Enum):
 class ErrorCode(Enum):
     CL_SUCCESS = 0
     CL_DEVICE_NOT_FOUND = -1
+    CL_DEVICE_NOT_AVAILABLE = -2
+    CL_COMPILER_NOT_AVAILABLE = -3
+    CL_MEM_OBJECT_ALLOCATION_FAILURE = -4
     CL_BUILD_PROGRAM_FAILURE = -11
     CL_INVALID_VALUE = -30
     CL_INVALID_PLATFORM = -32
@@ -654,11 +669,20 @@ def enqueue_fill_buffer(queue, mem, pattern, offset, size):
     return ev
 
 
-def enqueue_write_buffer(queue, mem, is_blocking, offset, size, ptr):
+def enqueue_write_buffer(queue, mem, blocking_read, offset, size, ptr):
     ev = cl_event()
     check(
         so.clEnqueueWriteBuffer(
-            queue, mem, is_blocking, offset, size, ptr, 0, None, byref(ev)
+            queue, mem, blocking_read, offset, size, ptr, 0, None, byref(ev)
+        )
+    )
+    return ev
+
+def enqueue_read_buffer(queue, mem, blocking_read, offset, size, ptr):
+    ev = cl_event()
+    check(
+        so.clEnqueueReadBuffer(
+            queue, mem, blocking_read, offset, size, ptr, 0, None, byref(ev)
         )
     )
     return ev
