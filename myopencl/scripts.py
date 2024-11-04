@@ -2,6 +2,7 @@
 from enum import Enum
 from humanize import naturalsize
 from os import get_terminal_size
+from pathlib import Path
 from textwrap import TextWrapper
 
 import click
@@ -80,17 +81,39 @@ def list_platforms():
 
 
 @cli.command()
-@click.argument("filename", type = click.File("rt"))
-def build_program(filename):
+@click.argument("filename", type = click.Path(exists = True))
+@click.option(
+    "-pi", "--platform-index", default = 0,
+    help = "Index of platform to use."
+)
+@click.option(
+    "-I", "include_paths",
+    type = click.Path(exists = True, file_okay = False, dir_okay = True),
+    multiple = True,
+    help = "Include path.",
+    default = ()
+)
+def build_program(filename, platform_index, include_paths):
     """Build an OpenCL program and list its details."""
-    source = filename.read()
+    path = Path(filename)
 
-    plat_id = cl.get_platform_ids()[0]
+    source = path.read_text()
+
+    plat_id = cl.get_platform_ids()[platform_index]
     dev = cl.get_device_ids(plat_id)[0]
     ctx = cl.create_context(dev)
 
+    dev_name = cl.get_device_info(dev, cl.DeviceInfo.CL_DEVICE_NAME)
+    print("OpenCL program: %s" % path)
+    print("Device        : %s" % dev_name)
+
     prog = cl.create_program_with_source(ctx, source)
-    cl.build_program(prog, dev, "-Werror", True, True)
+
+    opts = [
+        '-Werror',
+        '-cl-std=CL2.0'
+    ] + ['-I %s' % ip for ip in include_paths]
+    cl.build_program(prog, dev, " ".join(opts), True, True)
 
     wrapper = terminal_wrapper()
     pp_dict(wrapper, cl.get_context_details(ctx))
