@@ -132,8 +132,6 @@ so.clCreateCommandQueueWithProperties.argtypes = [
     POINTER(cl_queue_properties),
     POINTER(cl_int),
 ]
-so.clReleaseCommandQueue.restype = cl_int
-so.clReleaseCommandQueue.argtypes = [cl_command_queue]
 
 so.clGetCommandQueueInfo.restype = cl_int
 so.clGetCommandQueueInfo.argtypes = [
@@ -201,9 +199,6 @@ so.clCreateContext.argtypes = [
     POINTER(cl_int),
 ]
 
-so.clReleaseContext.restype = cl_int
-so.clReleaseContext.argtypes = [cl_context]
-
 # Device
 so.clGetDeviceInfo.restype = cl_int
 so.clGetDeviceInfo.argtypes = [
@@ -221,11 +216,6 @@ so.clGetDeviceIDs.argtypes = [
     cl_uint,
     POINTER(cl_device_id),
     POINTER(cl_uint),
-]
-
-so.clReleaseDevice.restype = cl_int
-so.clReleaseDevice.argtypes = [
-    cl_device_id
 ]
 
 # Event
@@ -257,9 +247,6 @@ so.clGetKernelInfo.argtypes = [
 so.clSetKernelArg.restype = cl_int
 so.clSetKernelArg.argtypes = [cl_kernel, cl_uint, c_size_t, c_void_p]
 
-so.clReleaseKernel.restype = cl_int
-so.clReleaseKernel.argtypes = [cl_kernel]
-
 # Mem
 so.clCreateBuffer.restype = cl_mem
 so.clCreateBuffer.argtypes = [
@@ -278,9 +265,6 @@ so.clGetMemObjectInfo.argtypes = [
     c_void_p,
     POINTER(c_size_t),
 ]
-
-so.clReleaseMemObject.restype = cl_int
-so.clReleaseMemObject.argtypes = [cl_mem]
 
 # Platform
 so.clGetPlatformIDs.restype = cl_int
@@ -334,8 +318,20 @@ so.clGetProgramInfo.argtypes = [
     POINTER(c_size_t),
 ]
 
-so.clReleaseProgram.restype = cl_int
-so.clReleaseProgram.argtypes = [cl_program]
+# Automatically generate level 0 bindings for release functions since
+# they all work the same.
+TYPE_RELEASERS = {
+    cl_command_queue : so.clReleaseCommandQueue,
+    cl_context : so.clReleaseContext,
+    cl_device_id : so.clReleaseDevice,
+    cl_kernel : so.clReleaseKernel,
+    cl_mem : so.clReleaseMemObject,
+    cl_program : so.clReleaseProgram
+}
+
+for ocl_type, fun in TYPE_RELEASERS.items():
+    setattr(fun, "restype", cl_int)
+    setattr(fun, "argtypes", [ocl_type])
 
 
 ########################################################################
@@ -641,10 +637,6 @@ def create_command_queue_with_properties(ctx, dev, lst):
     return check_last(so.clCreateCommandQueueWithProperties, ctx, dev, props)
 
 
-def release_command_queue(queue):
-    check(so.clReleaseCommandQueue(queue))
-
-
 def enqueue_nd_range_kernel(queue, kern, global_work, local_work):
     work_dim = len(global_work)
 
@@ -703,10 +695,6 @@ def create_context(dev_id):
     return check_last(so.clCreateContext, None, 1, byref(dev_id), None, None)
 
 
-def release_context(ctx):
-    check(so.clReleaseContext(ctx))
-
-
 def get_context_info(ctx, attr):
     return get_object_attr(so.clGetContextInfo, attr, ctx)
 
@@ -719,9 +707,6 @@ def get_device_info(id, attr):
 def get_device_ids(plat_id):
     dev_type = DeviceType.CL_DEVICE_TYPE_ALL.value
     return size_and_fill(so.clGetDeviceIDs, cl_uint, cl_device_id, plat_id, dev_type)
-
-def release_device(dev):
-    return check(so.clReleaseDevice(dev))
 
 
 # Event
@@ -748,9 +733,6 @@ def get_kernel_info(kern, attr):
 def set_kernel_arg(kern, i, arg):
     check(so.clSetKernelArg(kern, i, sizeof(arg), byref(arg)))
 
-def release_kernel(kernel):
-    check(so.clReleaseKernel(kernel))
-
 
 # Mem
 def get_mem_object_info(mem, attr):
@@ -759,10 +741,6 @@ def get_mem_object_info(mem, attr):
 
 def create_buffer(ctx, flags, n_bytes):
     return check_last(so.clCreateBuffer, ctx, flags.value, n_bytes, None)
-
-
-def release_mem_object(mem):
-    check(so.clReleaseMemObject(mem))
 
 
 # Platform
@@ -798,9 +776,9 @@ def get_program_build_info(prog, dev, attr):
 def get_program_info(prog, attr):
     return get_object_attr(so.clGetProgramInfo, attr, prog)
 
-def release_program(prog):
-    check(so.clReleaseProgram(prog))
-
+def release(obj):
+    rel_fun = TYPE_RELEASERS[type(obj)]
+    check(rel_fun(obj))
 
 ########################################################################
 # Level 3: Holistic functions that calls more than one OpenCL function

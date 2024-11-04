@@ -69,9 +69,12 @@ def list_platforms():
         pp_dict(wrapper, details)
         wrapper.initial_indent = INDENT_STR
         wrapper.subsequent_indent = wrapper.initial_indent + INDENT_STR
-        for dev_id in cl.get_device_ids(plat_id):
+        dev_ids = cl.get_device_ids(plat_id)
+        for dev_id in dev_ids:
             details = cl.get_device_details(dev_id)
             pp_dict(wrapper, details)
+            cl.release(dev_id)
+
 
 @cli.command()
 @click.argument("filename", type = click.File("rt"))
@@ -102,10 +105,10 @@ def build_kernel(filename):
         pp_dict(wrapper, cl.get_kernel_details(kernel))
 
     for kernel in kernels:
-        cl.release_kernel(kernel)
-    cl.release_program(prog)
-    cl.release_context(ctx)
-    cl.release_device(dev)
+        cl.release(kernel)
+    cl.release(prog)
+    cl.release(ctx)
+    cl.release(dev)
 
 def main():
     cli(obj={})
