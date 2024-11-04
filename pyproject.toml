@@ -13,7 +13,7 @@ classifiers = [
     "Programming Language :: Python"
 ]
 dependencies = [
-    "humanize"
+    "click", "humanize"
 ]
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -22,4 +22,4 @@ license = {file = "LICENSE"}
 homepage = "https://github.com/bjourne/myopencl"
 
 [project.scripts]
-mcl-info = "myopencl.scripts:list_platforms"
+mcl-tool = "myopencl.scripts:main"

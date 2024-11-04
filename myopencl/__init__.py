@@ -2,7 +2,6 @@
 from ctypes import *
 from enum import Enum, Flag, IntEnum
 
-
 ########################################################################
 # Level -1: ctypes utilities
 ########################################################################
@@ -224,6 +223,11 @@ so.clGetDeviceIDs.argtypes = [
     POINTER(cl_uint),
 ]
 
+so.clReleaseDevice.restype = cl_int
+so.clReleaseDevice.argtypes = [
+    cl_device_id
+]
+
 # Event
 so.clGetEventInfo.restype = cl_int
 so.clGetEventInfo.argtypes = [
@@ -252,6 +256,9 @@ so.clGetKernelInfo.argtypes = [
 
 so.clSetKernelArg.restype = cl_int
 so.clSetKernelArg.argtypes = [cl_kernel, cl_uint, c_size_t, c_void_p]
+
+so.clReleaseKernel.restype = cl_int
+so.clReleaseKernel.argtypes = [cl_kernel]
 
 # Mem
 so.clCreateBuffer.restype = cl_mem
@@ -326,6 +333,9 @@ so.clGetProgramInfo.argtypes = [
     c_void_p,
     POINTER(c_size_t),
 ]
+
+so.clReleaseProgram.restype = cl_int
+so.clReleaseProgram.argtypes = [cl_program]
 
 
 ########################################################################
@@ -517,6 +527,8 @@ class ProgramInfo(InfoEnum):
     CL_PROGRAM_DEVICES = 0x1163, POINTER(cl_device_id)
     CL_PROGRAM_SOURCE = 0x1164, c_char_p
     CL_PROGRAM_BINARY_SIZES = 0x1165, POINTER(c_size_t)
+    CL_PROGRAM_NUM_KERNELS = 0x1167, c_size_t
+    CL_PROGRAM_KERNEL_NAMES = 0x1168, c_char_p
 
 
 class ProgramBuildInfo(InfoEnum):
@@ -708,6 +720,9 @@ def get_device_ids(plat_id):
     dev_type = DeviceType.CL_DEVICE_TYPE_ALL.value
     return size_and_fill(so.clGetDeviceIDs, cl_uint, cl_device_id, plat_id, dev_type)
 
+def release_device(dev):
+    return check(so.clReleaseDevice(dev))
+
 
 # Event
 def get_event_info(ev, attr):
@@ -732,6 +747,9 @@ def get_kernel_info(kern, attr):
 
 def set_kernel_arg(kern, i, arg):
     check(so.clSetKernelArg(kern, i, sizeof(arg), byref(arg)))
+
+def release_kernel(kernel):
+    check(so.clReleaseKernel(kernel))
 
 
 # Mem
@@ -779,6 +797,9 @@ def get_program_build_info(prog, dev, attr):
 
 def get_program_info(prog, attr):
     return get_object_attr(so.clGetProgramInfo, attr, prog)
+
+def release_program(prog):
+    check(so.clReleaseProgram(prog))
 
 
 ########################################################################
