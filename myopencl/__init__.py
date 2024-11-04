@@ -2,6 +2,7 @@
 from ctypes import *
 from enum import Enum, Flag, IntEnum
 
+
 ########################################################################
 # Level -1: ctypes utilities
 ########################################################################
@@ -95,6 +96,13 @@ cl_event_info = cl_uint
 
 # Kernel
 cl_kernel_info = cl_uint
+cl_kernel_arg_info = cl_uint
+class cl_kernel_arg_address_qualifier(cl_uint):
+    pass
+class cl_kernel_arg_access_qualifier(cl_uint):
+    pass
+class cl_kernel_arg_type_qualifier(cl_uint):
+    pass
 
 
 # Memory
@@ -102,11 +110,11 @@ class cl_mem_flags(cl_bitfield):
     pass
 
 
-cl_mem_info = cl_uint
-
-
 class cl_mem_object_type(cl_uint):
     pass
+
+
+cl_mem_info = cl_uint
 
 
 # Platform
@@ -131,15 +139,6 @@ so.clCreateCommandQueueWithProperties.argtypes = [
     cl_device_id,
     POINTER(cl_queue_properties),
     POINTER(cl_int),
-]
-
-so.clGetCommandQueueInfo.restype = cl_int
-so.clGetCommandQueueInfo.argtypes = [
-    cl_command_queue,
-    cl_command_queue_info,
-    c_size_t,
-    c_void_p,
-    POINTER(c_size_t),
 ]
 
 so.clEnqueueNDRangeKernel.restype = cl_int
@@ -200,15 +199,6 @@ so.clCreateContext.argtypes = [
 ]
 
 # Device
-so.clGetDeviceInfo.restype = cl_int
-so.clGetDeviceInfo.argtypes = [
-    cl_device_id,
-    cl_device_info,
-    c_size_t,
-    c_void_p,
-    POINTER(c_size_t),
-]
-
 so.clGetDeviceIDs.restype = cl_int
 so.clGetDeviceIDs.argtypes = [
     cl_platform_id,
@@ -219,30 +209,12 @@ so.clGetDeviceIDs.argtypes = [
 ]
 
 # Event
-so.clGetEventInfo.restype = cl_int
-so.clGetEventInfo.argtypes = [
-    cl_event,
-    cl_event_info,
-    c_size_t,
-    c_void_p,
-    POINTER(c_size_t),
-]
-
 so.clWaitForEvents.restype = cl_int
 so.clWaitForEvents.argtypes = [cl_uint, POINTER(cl_event)]
 
 # Kernel
 so.clCreateKernel.restype = cl_kernel
 so.clCreateKernel.argtypes = [cl_program, c_char_p, POINTER(cl_int)]
-
-so.clGetKernelInfo.restype = cl_int
-so.clGetKernelInfo.argtypes = [
-    cl_kernel,
-    cl_kernel_info,
-    c_size_t,
-    c_void_p,
-    POINTER(c_size_t),
-]
 
 so.clSetKernelArg.restype = cl_int
 so.clSetKernelArg.argtypes = [cl_kernel, cl_uint, c_size_t, c_void_p]
@@ -257,27 +229,9 @@ so.clCreateBuffer.argtypes = [
     POINTER(cl_int),
 ]
 
-so.clGetMemObjectInfo.restype = cl_int
-so.clGetMemObjectInfo.argtypes = [
-    cl_mem,
-    cl_mem_info,
-    c_size_t,
-    c_void_p,
-    POINTER(c_size_t),
-]
-
 # Platform
 so.clGetPlatformIDs.restype = cl_int
 so.clGetPlatformIDs.argtypes = [cl_uint, POINTER(cl_platform_id), POINTER(cl_uint)]
-
-so.clGetPlatformInfo.restype = cl_int
-so.clGetPlatformInfo.argtypes = [
-    cl_platform_id,
-    cl_platform_info,
-    c_size_t,
-    c_void_p,
-    POINTER(c_size_t),
-]
 
 # Program
 so.clCreateProgramWithSource.restype = cl_program
@@ -299,40 +253,38 @@ so.clBuildProgram.argtypes = [
     c_void_p,
 ]
 
-so.clGetProgramBuildInfo.restype = cl_int
-so.clGetProgramBuildInfo.argtypes = [
-    cl_program,
-    cl_device_id,
-    cl_program_build_info,
-    c_size_t,
-    c_void_p,
-    POINTER(c_size_t),
-]
-
-so.clGetProgramInfo.restype = cl_int
-so.clGetProgramInfo.argtypes = [
-    cl_program,
-    cl_program_info,
-    c_size_t,
-    c_void_p,
-    POINTER(c_size_t),
-]
-
 # Automatically generate level 0 bindings for release functions since
 # they all work the same.
 TYPE_RELEASERS = {
-    cl_command_queue : so.clReleaseCommandQueue,
-    cl_context : so.clReleaseContext,
-    cl_device_id : so.clReleaseDevice,
-    cl_kernel : so.clReleaseKernel,
-    cl_mem : so.clReleaseMemObject,
-    cl_program : so.clReleaseProgram
+    cl_command_queue: so.clReleaseCommandQueue,
+    cl_context: so.clReleaseContext,
+    cl_device_id: so.clReleaseDevice,
+    cl_kernel: so.clReleaseKernel,
+    cl_mem: so.clReleaseMemObject,
+    cl_program: so.clReleaseProgram,
 }
 
 for ocl_type, fun in TYPE_RELEASERS.items():
     setattr(fun, "restype", cl_int)
     setattr(fun, "argtypes", [ocl_type])
 
+# Automatically generate level 0 bindings for functions to get object
+# info.
+TYPE_INFOS = [
+    (so.clGetCommandQueueInfo, [cl_command_queue, cl_command_queue_info]),
+    (so.clGetDeviceInfo, [cl_device_id, cl_device_info]),
+    (so.clGetEventInfo, [cl_event, cl_event_info]),
+    (so.clGetKernelInfo, [cl_kernel, cl_kernel_info]),
+    (so.clGetKernelArgInfo, [cl_kernel, cl_uint, cl_kernel_arg_info]),
+    (so.clGetMemObjectInfo, [cl_mem, cl_mem_info]),
+    (so.clGetPlatformInfo, [cl_platform_id, cl_platform_info]),
+    (so.clGetProgramBuildInfo, [cl_program, cl_device_id, cl_program_build_info]),
+    (so.clGetProgramInfo, [cl_program, cl_program_info])
+]
+for fun, args in TYPE_INFOS:
+    args = args + [c_size_t, c_void_p, POINTER(c_size_t)]
+    setattr(fun, "restype", cl_int)
+    setattr(fun, "argtypes", args)
 
 ########################################################################
 # Level 1: Pythonic enumerations and bitfieds
@@ -527,12 +479,6 @@ class ProgramInfo(InfoEnum):
     CL_PROGRAM_KERNEL_NAMES = 0x1168, c_char_p
 
 
-class ProgramBuildInfo(InfoEnum):
-    CL_PROGRAM_BUILD_STATUS = 0x1181, cl_build_status
-    CL_PROGRAM_BUILD_OPTIONS = 0x1182, c_char_p
-    CL_PROGRAM_BUILD_LOG = 0x1183, c_char_p
-
-
 class KernelInfo(InfoEnum):
     CL_KERNEL_FUNCTION_NAME = 0x1190, c_char_p
     CL_KERNEL_NUM_ARGS = 0x1191, cl_uint
@@ -541,8 +487,41 @@ class KernelInfo(InfoEnum):
     CL_KERNEL_PROGRAM = 0x1194, cl_program
     CL_KERNEL_ATTRIBUTES = 0x1195, c_char_p
 
+class KernelArgInfo(InfoEnum):
+    CL_KERNEL_ARG_ADDRESS_QUALIFIER = 0x1196, cl_kernel_arg_address_qualifier
+    CL_KERNEL_ARG_ACCESS_QUALIFIER = 0x1197, cl_kernel_arg_access_qualifier
+    CL_KERNEL_ARG_TYPE_NAME = 0x1198, c_char_p
+    CL_KERNEL_ARG_TYPE_QUALIFIER = 0x1199, cl_kernel_arg_type_qualifier
+    CL_KERNEL_ARG_NAME = 0x119A, c_char_p
+
+class KernelArgAccessQualifier(Enum):
+    CL_KERNEL_ARG_ACCESS_READ_ONLY = 0x11A0
+    CL_KERNEL_ARG_ACCESS_WRITE_ONLY = 0x11A1
+    CL_KERNEL_ARG_ACCESS_READ_WRITE = 0x11A2
+    CL_KERNEL_ARG_ACCESS_NONE = 0x11A3
+
+class KernelArgAddressQualifier(Enum):
+    CL_KERNEL_ARG_ADDRESS_GLOBAL = 0x119B
+    CL_KERNEL_ARG_ADDRESS_LOCAL = 0x119C
+    CL_KERNEL_ARG_ADDRESS_CONSTANT = 0x119D
+    CL_KERNEL_ARG_ADDRESS_PRIVATE = 0x119E
+
+class KernelArgTypeQualifier(Flag):
+    CL_KERNEL_ARG_TYPE_NONE = 0
+    CL_KERNEL_ARG_TYPE_CONST = 1 << 0
+    CL_KERNEL_ARG_TYPE_RESTRICT = 1 << 1
+    CL_KERNEL_ARG_TYPE_VOLATILE = 1 << 2
+    CL_KERNEL_ARG_TYPE_PIPE = 1 << 3
+
+class ProgramBuildInfo(InfoEnum):
+    CL_PROGRAM_BUILD_STATUS = 0x1181, cl_build_status
+    CL_PROGRAM_BUILD_OPTIONS = 0x1182, c_char_p
+    CL_PROGRAM_BUILD_LOG = 0x1183, c_char_p
+
+
 
 cl_type_to_python_type = {
+    cl_bool: bool,
     cl_build_status: BuildStatus,
     cl_command_execution_status: CommandExecutionStatus,
     cl_command_queue_properties: CommandQueueProperties,
@@ -551,9 +530,12 @@ cl_type_to_python_type = {
     cl_device_fp_config: DeviceFpConfig,
     cl_device_local_mem_type: DeviceLocalMemType,
     cl_device_type: DeviceType,
+    cl_kernel_arg_access_qualifier : KernelArgAccessQualifier,
+    cl_kernel_arg_address_qualifier : KernelArgAddressQualifier,
+    cl_kernel_arg_type_qualifier : KernelArgTypeQualifier,
     cl_mem_flags: MemFlags,
     cl_mem_object_type: MemObjectType,
-    cl_bool: bool,
+
 }
 
 # All the enums that are not necessarily in OpenCL 1.2
@@ -729,6 +711,9 @@ def create_kernel(prog, name):
 def get_kernel_info(kern, attr):
     return get_object_attr(so.clGetKernelInfo, attr, kern)
 
+def get_kernel_arg_info(kern, i, attr):
+    return get_object_attr(so.clGetKernelArgInfo, attr, kern, i)
+
 
 def set_kernel_arg(kern, i, arg):
     check(so.clSetKernelArg(kern, i, sizeof(arg), byref(arg)))
@@ -776,9 +761,11 @@ def get_program_build_info(prog, dev, attr):
 def get_program_info(prog, attr):
     return get_object_attr(so.clGetProgramInfo, attr, prog)
 
+
 def release(obj):
     rel_fun = TYPE_RELEASERS[type(obj)]
     check(rel_fun(obj))
+
 
 ########################################################################
 # Level 3: Holistic functions that calls more than one OpenCL function
@@ -806,6 +793,9 @@ def get_context_details(ctx):
 
 def get_kernel_details(kern):
     return {k: get_kernel_info(kern, k) for k in KernelInfo}
+
+def get_kernel_arg_details(kern, i):
+    return {k: get_kernel_arg_info(kern, i, k) for k in KernelArgInfo}
 
 
 def get_mem_object_details(mem):

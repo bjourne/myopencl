@@ -1,4 +1,4 @@
-__kernel void vecadd(__global const int *a, __global const int *b, __global int *c) {
+__kernel void vecadd(__global const int * restrict a, __global const int *b, __global int *c) {
     size_t i = get_global_id(0);
     c[i] = a[i] + b[i];
 }

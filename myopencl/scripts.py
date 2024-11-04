@@ -61,6 +61,9 @@ def cli(ctx):
 
 @cli.command()
 def list_platforms():
+    """
+    List OpenCL platform details.
+    """
     wrapper = terminal_wrapper()
     for plat_id in cl.get_platform_ids():
         wrapper.initial_indent = ""
@@ -78,7 +81,8 @@ def list_platforms():
 
 @cli.command()
 @click.argument("filename", type = click.File("rt"))
-def build_kernel(filename):
+def build_program(filename):
+    """Build an OpenCL program and list its details."""
     source = filename.read()
 
     plat_id = cl.get_platform_ids()[0]
@@ -99,10 +103,13 @@ def build_kernel(filename):
     names = names.split(";")
 
     kernels = [cl.create_kernel(prog, name) for name in names]
-
     for kernel in kernels:
         wrapper.initial_indent = INDENT_STR
         pp_dict(wrapper, cl.get_kernel_details(kernel))
+        n_args = cl.get_kernel_info(kernel, cl.KernelInfo.CL_KERNEL_NUM_ARGS)
+        wrapper.initial_indent = 2 * INDENT_STR
+        for i in range(n_args):
+            pp_dict(wrapper, cl.get_kernel_arg_details(kernel, i))
 
     for kernel in kernels:
         cl.release(kernel)
