@@ -70,20 +70,21 @@ def build_program(filename, platform_index, include_paths):
     ] + [f"-I {ip}" for ip in include_paths]
     cl.build_program(prog, dev, " ".join(opts), True, True)
 
-    wrapper = terminal_wrapper()
-    pp_dict(wrapper, cl.get_details(ctx))
-    pp_dict(wrapper, cl.get_details(prog, dev))
-    pp_dict(wrapper, cl.get_details(prog))
+    wrap = terminal_wrapper()
+    pp_dict(wrap, cl.get_details(ctx))
+    pp_dict(wrap, cl.get_details(prog, dev))
+    pp_dict(wrap, cl.get_details(prog))
 
     names = cl.get_kernel_names(prog)
     kernels = [cl.create_kernel(prog, name) for name in names]
     for kernel in kernels:
-        wrapper.initial_indent = INDENT_STR
-        pp_dict(wrapper, cl.get_details(kernel))
-        n_args = cl.get_info(cl.KernelInfo.CL_KERNEL_NUM_ARGS, kernel)
-        wrapper.initial_indent = 2 * INDENT_STR
-        for i in range(n_args):
-            pp_dict(wrapper, cl.get_details(kernel, i))
+        wrap.initial_indent = INDENT_STR
+        pp_dict(wrap, cl.get_details(kernel))
+
+        all_details = cl.get_kernel_args_details(kernel)
+        wrap.initial_indent = 2 * INDENT_STR
+        for details in all_details:
+            pp_dict(wrap, details)
 
     for kernel in kernels:
         cl.release(kernel)

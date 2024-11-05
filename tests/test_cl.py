@@ -12,9 +12,33 @@ import torch
 PLAT_IDX = 0
 VECADD = Path("kernels/vecadd.cl")
 
-TORCH_TO_CTYPES = {
-    torch.float32 : ctypes.c_float
-}
+########################################################################
+# Utils
+########################################################################
+
+def write_torch_tensor(ctx, q_name, buf_name, x):
+    assert x.is_contiguous()
+    assert x.is_cpu
+
+    c_ptr = ctypes.cast(x.data_ptr(), ctypes.c_void_p)
+    return ctx.create_input_buffer(q_name, buf_name, x.nbytes, c_ptr)
+
+def read_torch_tensor(ctx, q_name, buf_name, x):
+    assert x.is_contiguous()
+    assert x.is_cpu
+
+    c_ptr = ctypes.cast(x.data_ptr(), ctypes.c_void_p)
+    return ctx.read_buffer(q_name, buf_name, x.nbytes, c_ptr)
+
+def write_numpy_array(ctx, q_name, buf_name, x):
+    c_ptr = np.ctypeslib.as_ctypes(x)
+    return ctx.create_input_buffer(q_name, buf_name, x.nbytes, c_ptr)
+
+def read_numpy_array(ctx, q_name, buf_name, x):
+    c_ptr = np.ctypeslib.as_ctypes(x)
+    return ctx.read_buffer(q_name, buf_name, x.nbytes, c_ptr)
+
+
 
 def test_release_none():
     try:
@@ -37,6 +61,37 @@ def test_get_queue_size():
             assert cl.get_info(attr, q) == -1
             for o in [ctx, dev_id]:
                 cl.release(o)
+
+def test_run_vecadd_obj():
+    n_els = 16
+    A = np.random.uniform(size = (n_els,)).astype(np.float32)
+    B = np.random.uniform(size = (n_els,)).astype(np.float32)
+    C = np.empty_like(A)
+
+    ctx = MyContext(PLAT_IDX, 0)
+    ctx.create_queue("main", [])
+    write_numpy_array(ctx, "main", "A", A)
+    write_numpy_array(ctx, "main", "B", B)
+    ctx.create_output_buffer("C", A.nbytes)
+    ctx.create_program("vecadd", VECADD)
+
+    ctx.run_kernel("main", "vecadd", "vecadd",
+                   [n_els], None,
+                   ["A", "B", "C"])
+
+    ev = read_numpy_array(ctx, "main", "C", C)
+    cl.wait_for_events([ev])
+    assert np.sum(A + B - C) == 0.0
+
+    C = np.empty_like(A)
+    ctx.run_kernel("main", "vecadd", "vecadd_serial",
+                   [1], None,
+                   [n_els, "A", "B", "C"])
+    ev = read_numpy_array(ctx, "main", "C", C)
+    cl.wait_for_events([ev])
+    assert np.sum(A + B - C) == 0.0
+
+    ctx.finish_and_release()
 
 def test_run_vecadd():
     plat_id = cl.get_platform_ids()[PLAT_IDX]
@@ -146,22 +201,6 @@ def test_ooo_queue():
     cl.wait_for_events([ev1, ev2])
     ctx.finish_and_release()
 
-def write_torch_tensor(ctx, q_name, buf_name, x):
-    assert x.is_contiguous()
-    assert x.is_cpu
-
-    tp = TORCH_TO_CTYPES[x.dtype]
-    c_ptr = ctypes.cast(x.data_ptr(), ctypes.POINTER(tp))
-    return ctx.create_input_buffer(q_name, buf_name, x.nbytes, c_ptr)
-
-def read_torch_tensor(ctx, q_name, buf_name, x):
-    assert x.is_contiguous()
-    assert x.is_cpu
-
-    tp = TORCH_TO_CTYPES[x.dtype]
-    c_ptr = ctypes.cast(x.data_ptr(), ctypes.POINTER(tp))
-    return ctx.read_buffer(q_name, buf_name, x.nbytes, c_ptr)
-
 def test_torch_tensors():
     orig = torch.randn((64, 3, 3, 3, 25))
     new = torch.empty_like(orig)
@@ -184,8 +223,9 @@ def test_conv2d():
     ev1 = write_torch_tensor(ctx, "main", "x", x)
 
     path = Path("kernels/conv2d.cl")
-    ctx.create_program_and_kernels("conv2d", path)
+    ctx.create_program("conv2d", path)
 
-    ctx.print()
+    ctx.set_kernel_args("conv2d", "conv2d", [4.5])
+    ctx.enqueue_kernel("main", "conv2d", "conv2d", [8], None)
 
     ctx.finish_and_release()

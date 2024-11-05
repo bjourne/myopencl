@@ -10,9 +10,9 @@ __kernel void vecadd(
 
 __kernel void vecadd_serial(
     uint N,
-    __global const int * restrict a,
-    __global const int * restrict b,
-    __global int * restrict c
+    __global const float * restrict a,
+    __global const float * restrict b,
+    __global float * restrict c
 ) {
     for (uint i = 0; i < N; i++) {
         c[i] = a[i] + b[i];

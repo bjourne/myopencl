@@ -273,8 +273,10 @@ class ErrorCode(Enum):
     CL_INVALID_ARG_INDEX = -49
     CL_INVALID_ARG_VALUE = -50
     CL_INVALID_ARG_SIZE = -51
+    CL_INVALID_KERNEL_ARGS = -52
     CL_INVALID_WORK_DIMENSION = -53
     CL_INVALID_WORK_GROUP_SIZE = -54
+    CL_INVALID_WORK_ITEM_SIZE = -55
 
 
 class EventInfo(InfoEnum):
@@ -800,7 +802,7 @@ def build_program(prog, dev, opts, throw, print_log):
     err = so.clBuildProgram(prog, 1, pointer(dev), opts, None, None)
     if err != 0 and print_log:
         attr = ProgramBuildInfo.CL_PROGRAM_BUILD_LOG
-        log = get_program_build_info(prog, dev, attr)
+        log = get_info(attr, prog, dev)
         print(log)
     if throw:
         check(err)
@@ -826,3 +828,7 @@ def get_kernel_names(prog):
         prog
     )
     return [n for n in names.split(";") if n]
+
+def get_kernel_args_details(kern):
+    n_args = get_info(KernelInfo.CL_KERNEL_NUM_ARGS, kern)
+    return [get_details(kern, i) for i in range(n_args)]
