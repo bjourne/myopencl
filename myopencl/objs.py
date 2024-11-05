@@ -24,32 +24,13 @@ class MyContext:
         self.bufs = {}
         self.events = {}
 
-    def add_queue(self, name):
+    def add_queue(self, name, props):
         q = cl.create_command_queue_with_properties(
-            self.ctx, self.dev_id, []
+            self.ctx, self.dev_id, props
         )
         self.queues[name] = q
 
-    def add_input_buffer(self, q_name, buf_name, n_bytes, c_ptr):
-        buf = cl.create_buffer(
-            self.ctx, cl.MemFlags.CL_MEM_READ_ONLY, n_bytes
-        )
-        q = self.queues[q_name]
-        ev = cl.enqueue_write_buffer(q, buf, False, 0, n_bytes, c_ptr)
-        self.bufs[buf_name] = buf
-        name = name_event("write", q_name, buf_name)
-        self.events[name] = ev
-        return ev
-
-    def read_buffer(self, q_name, buf_name, n_bytes, c_ptr):
-        q = self.queues[q_name]
-        buf = self.bufs[buf_name]
-        ev = cl.enqueue_read_buffer(q,  buf, False, 0, n_bytes, c_ptr)
-        name = name_event("read", q_name, buf_name)
-        self.events[name] = ev
-        return ev
-
-    def finish_release(self):
+    def finish_and_release(self):
         for queue in self.queues.values():
             cl.flush(queue)
             cl.finish(queue)
@@ -79,3 +60,23 @@ class MyContext:
 
         for header, d in data:
             pp_dict_with_header(header, wrap, d)
+
+    # Reading and writing buffers
+    def add_input_buffer(self, q_name, buf_name, n_bytes, c_ptr):
+        buf = cl.create_buffer(
+            self.ctx, cl.MemFlags.CL_MEM_READ_ONLY, n_bytes
+        )
+        q = self.queues[q_name]
+        ev = cl.enqueue_write_buffer(q, buf, False, 0, n_bytes, c_ptr)
+        self.bufs[buf_name] = buf
+        name = name_event("w", q_name, buf_name)
+        self.events[name] = ev
+        return ev
+
+    def read_buffer(self, q_name, buf_name, n_bytes, c_ptr):
+        q = self.queues[q_name]
+        buf = self.bufs[buf_name]
+        ev = cl.enqueue_read_buffer(q,  buf, False, 0, n_bytes, c_ptr)
+        name = name_event("r", q_name, buf_name)
+        self.events[name] = ev
+        return ev

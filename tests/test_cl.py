@@ -8,6 +8,7 @@ import ctypes
 import myopencl as cl
 import numpy as np
 
+PLAT_IDX = 0
 VECADD = Path("kernels/vecadd.cl")
 
 def test_release_none():
@@ -82,9 +83,11 @@ def test_run_vecadd():
 
 
 def test_objs():
-    ctx = MyContext(0, 0)
-    ctx.add_queue("main0")
-    ctx.add_queue("main1")
+    status_key = cl.EventInfo.CL_EVENT_COMMAND_EXECUTION_STATUS
+
+    ctx = MyContext(PLAT_IDX, 0)
+    ctx.add_queue("main0", [])
+    ctx.add_queue("main1", [])
 
     n_els = 10 * 1024 * 1024
     arr1 = np.random.uniform(size = (n_els,)).astype(np.float32)
@@ -98,7 +101,32 @@ def test_objs():
     cl.wait_for_events([ev2])
 
     for ev in [ev1, ev2]:
-        key = cl.EventInfo.CL_EVENT_COMMAND_EXECUTION_STATUS
         val = cl.CommandExecutionStatus.CL_COMPLETE
-        assert cl.get_event_info(ev, key) == val
+        assert cl.get_event_info(ev, status_key) == val
     assert np.array_equal(arr1, arr2)
+    ctx.finish_and_release()
+
+def test_ooo_queue():
+    prop_key = cl.CommandQueueInfo.CL_QUEUE_PROPERTIES
+    prop_val = cl.CommandQueueProperties.CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE
+    props = [prop_key, prop_val]
+    ctx = MyContext(PLAT_IDX, 0)
+    ctx.add_queue("main", props)
+
+    n_els = 10 * 1024 * 1024
+    arr = np.random.uniform(size = (n_els,)).astype(np.float32)
+    c_ptr = np.ctypeslib.as_ctypes(arr)
+
+    ev1 = ctx.add_input_buffer("main", "buf1", arr.nbytes, c_ptr)
+    ev2 = ctx.add_input_buffer("main", "buf2", arr.nbytes, c_ptr)
+
+    # Since the queue is out of order both events should be running.
+    statuses = {
+        cl.CommandExecutionStatus.CL_SUBMITTED,
+        cl.CommandExecutionStatus.CL_RUNNING
+    }
+    key = cl.EventInfo.CL_EVENT_COMMAND_EXECUTION_STATUS
+    assert (cl.get_event_info(ev1, key) in statuses and
+            cl.get_event_info(ev2, key) in statuses)
+    cl.wait_for_events([ev1, ev2])
+    ctx.finish_and_release()

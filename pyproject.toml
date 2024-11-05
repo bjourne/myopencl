@@ -25,6 +25,7 @@ homepage = "https://github.com/bjourne/myopencl"
 
 [project.optional-dependencies]
 test = [
+    "numpy",
     "pytest>=5.0.0",
     "torch"
 ]
