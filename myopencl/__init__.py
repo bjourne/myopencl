@@ -684,11 +684,11 @@ def enqueue_fill_buffer(queue, mem, pattern, offset, size):
     return ev
 
 
-def enqueue_write_buffer(queue, mem, blocking_read, offset, size, ptr):
+def enqueue_write_buffer(queue, mem, blocking_write, offset, size, ptr):
     ev = cl_event()
     check(
         so.clEnqueueWriteBuffer(
-            queue, mem, blocking_read, offset, size, ptr, 0, None, byref(ev)
+            queue, mem, blocking_write, offset, size, ptr, 0, None, byref(ev)
         )
     )
     return ev
@@ -823,7 +823,6 @@ def get_device_details(dev_id):
 
 def get_program_build_details(prog, dev):
     return {k: get_program_build_info(prog, dev, k) for k in ProgramBuildInfo}
-
 
 def get_program_details(prog):
     return {k: get_program_info(prog, k) for k in ProgramInfo}
