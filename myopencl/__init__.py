@@ -567,6 +567,9 @@ OPTIONAL_INFO = {
     ErrorCode.CL_INVALID_VALUE : {
         CommandQueueInfo.CL_QUEUE_SIZE : -1
     },
+    ErrorCode.CL_INVALID_COMMAND_QUEUE : {
+        CommandQueueInfo.CL_QUEUE_SIZE : -1
+    },
     ErrorCode.CL_INVALID_PROGRAM_EXECUTABLE : {
         ProgramInfo.CL_PROGRAM_NUM_KERNELS : 0,
         ProgramInfo.CL_PROGRAM_KERNEL_NAMES : ""

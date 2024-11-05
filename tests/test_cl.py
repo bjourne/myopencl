@@ -8,7 +8,7 @@ import ctypes
 import myopencl as cl
 import numpy as np
 
-PLAT_IDX = 0
+PLAT_IDX = 1
 VECADD = Path("kernels/vecadd.cl")
 
 def test_release_none():
@@ -23,8 +23,18 @@ def test_release_device():
     dev_id = cl.get_device_ids(plat_id)[0]
     cl.release(dev_id)
 
+def test_get_queue_size():
+    attr = cl.CommandQueueInfo.CL_QUEUE_SIZE
+    for plat_id in cl.get_platform_ids():
+        for dev_id in cl.get_device_ids(plat_id):
+            ctx = cl.create_context(dev_id)
+            q = cl.create_command_queue_with_properties(ctx, dev_id, [])
+            assert cl.get_command_queue_info(q, attr) == -1
+            for o in [ctx, dev_id]:
+                cl.release(o)
+
 def test_run_vecadd():
-    plat_id = cl.get_platform_ids()[0]
+    plat_id = cl.get_platform_ids()[PLAT_IDX]
     dev = cl.get_device_ids(plat_id)[0]
 
     ctx = cl.create_context(dev)
