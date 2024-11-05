@@ -1,4 +1,4 @@
-# Copyright (C) Björn A. Lindqvist 2024
+# Copyright (C) 2024 Björn A. Lindqvist
 from ctypes import *
 from enum import Enum, Flag, IntEnum
 
@@ -20,7 +20,7 @@ def OPAQUE_POINTER(name="opaque"):
 
 
 ########################################################################
-# Level 0: Typedefs and function definitions
+# Level 0: Typedefs
 ########################################################################
 so = cdll.LoadLibrary("libOpenCL.so")
 
@@ -128,183 +128,8 @@ cl_program_build_info = cl_uint
 cl_properties = cl_ulong
 cl_queue_properties = cl_properties
 
-
-# Functions here
-
-
-# Command Queue
-so.clCreateCommandQueueWithProperties.restype = cl_command_queue
-so.clCreateCommandQueueWithProperties.argtypes = [
-    cl_context,
-    cl_device_id,
-    POINTER(cl_queue_properties),
-    POINTER(cl_int),
-]
-
-so.clEnqueueNDRangeKernel.restype = cl_int
-so.clEnqueueNDRangeKernel.argtypes = [
-    cl_command_queue,
-    cl_kernel,
-    cl_uint,
-    POINTER(c_size_t),
-    POINTER(c_size_t),
-    POINTER(c_size_t),
-    cl_uint,
-    POINTER(cl_event),
-    POINTER(cl_event),
-]
-
-so.clEnqueueFillBuffer.restype = cl_int
-so.clEnqueueFillBuffer.argtypes = [
-    cl_command_queue,
-    cl_mem,
-    c_void_p,
-    c_size_t,
-    c_size_t,
-    c_size_t,
-    cl_uint,
-    POINTER(cl_event),
-    POINTER(cl_event),
-]
-
-so.clEnqueueWriteBuffer.restype = cl_int
-so.clEnqueueWriteBuffer.argtypes = [
-    cl_command_queue,
-    cl_mem,
-    cl_bool,
-    c_size_t,
-    c_size_t,
-    c_void_p,
-    cl_uint,
-    POINTER(cl_event),
-    POINTER(cl_event),
-]
-
-so.clEnqueueReadBuffer.restype = cl_int
-so.clEnqueueReadBuffer.argtypes = [
-    cl_command_queue,
-    cl_mem,
-    cl_bool,
-    c_size_t, c_size_t,
-    c_void_p,
-    cl_uint,
-    POINTER(cl_event),
-    POINTER(cl_event),
-]
-
-so.clFlush.restype = cl_int
-so.clFlush.argtypes = [cl_command_queue]
-
-so.clFinish.restype = cl_int
-so.clFinish.argtypes = [cl_command_queue]
-
-
-# Context
-so.clCreateContext.restype = cl_context
-so.clCreateContext.argtypes = [
-    POINTER(cl_context_properties),
-    cl_uint,
-    POINTER(cl_device_id),
-    c_void_p,
-    c_void_p,
-    POINTER(cl_int),
-]
-
-# Device
-so.clGetDeviceIDs.restype = cl_int
-so.clGetDeviceIDs.argtypes = [
-    cl_platform_id,
-    cl_device_type,
-    cl_uint,
-    POINTER(cl_device_id),
-    POINTER(cl_uint),
-]
-
-# Event
-so.clWaitForEvents.restype = cl_int
-so.clWaitForEvents.argtypes = [cl_uint, POINTER(cl_event)]
-
-# Kernel
-so.clCreateKernel.restype = cl_kernel
-so.clCreateKernel.argtypes = [cl_program, c_char_p, POINTER(cl_int)]
-
-so.clSetKernelArg.restype = cl_int
-so.clSetKernelArg.argtypes = [cl_kernel, cl_uint, c_size_t, c_void_p]
-
-# Mem
-so.clCreateBuffer.restype = cl_mem
-so.clCreateBuffer.argtypes = [
-    cl_context,
-    cl_mem_flags,
-    c_size_t,
-    c_void_p,
-    POINTER(cl_int),
-]
-
-# Platform
-so.clGetPlatformIDs.restype = cl_int
-so.clGetPlatformIDs.argtypes = [
-    cl_uint, POINTER(cl_platform_id), POINTER(cl_uint)
-]
-
-# Program
-so.clCreateProgramWithSource.restype = cl_program
-so.clCreateProgramWithSource.argtypes = [
-    cl_context,
-    cl_uint,
-    POINTER(c_char_p),
-    POINTER(c_size_t),
-    POINTER(cl_int),
-]
-
-so.clBuildProgram.restype = cl_int
-so.clBuildProgram.argtypes = [
-    cl_program,
-    cl_uint,
-    POINTER(cl_device_id),
-    c_char_p,
-    c_void_p,
-    c_void_p,
-]
-
-# Automatically generate level 0 bindings for release functions since
-# they all work the same.
-TYPE_RELEASERS = {
-    cl_command_queue: so.clReleaseCommandQueue,
-    cl_context: so.clReleaseContext,
-    cl_event: so.clReleaseEvent,
-    cl_device_id: so.clReleaseDevice,
-    cl_kernel: so.clReleaseKernel,
-    cl_mem: so.clReleaseMemObject,
-    cl_program: so.clReleaseProgram,
-}
-
-for ocl_type, ocl_fun in TYPE_RELEASERS.items():
-    setattr(ocl_fun, "restype", cl_int)
-    setattr(ocl_fun, "argtypes", [ocl_type])
-
-# Automatically generate level 0 bindings for functions to get object
-# info.
-TYPE_INFOS = [
-    (so.clGetCommandQueueInfo, [cl_command_queue, cl_command_queue_info]),
-    (so.clGetDeviceInfo, [cl_device_id, cl_device_info]),
-    (so.clGetEventInfo, [cl_event, cl_event_info]),
-    (so.clGetKernelInfo, [cl_kernel, cl_kernel_info]),
-    (so.clGetKernelArgInfo, [cl_kernel, cl_uint, cl_kernel_arg_info]),
-    (so.clGetMemObjectInfo, [cl_mem, cl_mem_info]),
-    (so.clGetPlatformInfo, [cl_platform_id, cl_platform_info]),
-    (so.clGetProgramBuildInfo, [
-        cl_program, cl_device_id, cl_program_build_info
-    ]),
-    (so.clGetProgramInfo, [cl_program, cl_program_info])
-]
-for ocl_fun, args in TYPE_INFOS:
-    args = args + [c_size_t, c_void_p, POINTER(c_size_t)]
-    setattr(ocl_fun, "restype", cl_int)
-    setattr(ocl_fun, "argtypes", args)
-
 ########################################################################
-# Level 1: Pythonic enumerations and bitfieds
+# Level 1: Enums
 ########################################################################
 class InfoEnum(Enum):
     def __new__(cls, val, tp):
@@ -543,7 +368,18 @@ class ProgramBuildInfo(InfoEnum):
     CL_PROGRAM_BUILD_OPTIONS = 0x1182, c_char_p
     CL_PROGRAM_BUILD_LOG = 0x1183, c_char_p
 
-
+OPTIONAL_INFO = {
+    ErrorCode.CL_INVALID_VALUE : {
+        CommandQueueInfo.CL_QUEUE_SIZE : -1
+    },
+    ErrorCode.CL_INVALID_COMMAND_QUEUE : {
+        CommandQueueInfo.CL_QUEUE_SIZE : -1
+    },
+    ErrorCode.CL_INVALID_PROGRAM_EXECUTABLE : {
+        ProgramInfo.CL_PROGRAM_NUM_KERNELS : 0,
+        ProgramInfo.CL_PROGRAM_KERNEL_NAMES : ""
+    }
+}
 
 cl_type_to_python_type = {
     cl_bool: bool,
@@ -562,34 +398,222 @@ cl_type_to_python_type = {
     cl_mem_object_type: MemObjectType,
 }
 
-TYPE_INFO_GETTERS = {
-    (cl_command_queue,) : (so.clGetCommandQueueInfo, CommandQueueInfo),
-    (cl_context,) : (so.clGetContextInfo, ContextInfo),
-    (cl_device_id,) : (so.clGetDeviceInfo, DeviceInfo),
-    (cl_event,) : (so.clGetEventInfo, EventInfo),
-    (cl_kernel,) : (so.clGetKernelInfo, KernelInfo),
-    (cl_kernel, int) : (so.clGetKernelArgInfo, KernelArgInfo),
-    (cl_mem,) : (so.clGetMemObjectInfo, MemInfo),
-    (cl_platform_id,) : (so.clGetPlatformInfo, PlatformInfo),
-    (cl_program,) : (so.clGetProgramInfo, ProgramInfo),
-    (cl_program, cl_device_id) : (so.clGetProgramBuildInfo, ProgramBuildInfo)
+########################################################################
+# Level 2: Functions
+########################################################################
+
+# Command Queue
+so.clCreateCommandQueueWithProperties.restype = cl_command_queue
+so.clCreateCommandQueueWithProperties.argtypes = [
+    cl_context,
+    cl_device_id,
+    POINTER(cl_queue_properties),
+    POINTER(cl_int),
+]
+
+so.clEnqueueNDRangeKernel.restype = cl_int
+so.clEnqueueNDRangeKernel.argtypes = [
+    cl_command_queue,
+    cl_kernel,
+    cl_uint,
+    POINTER(c_size_t),
+    POINTER(c_size_t),
+    POINTER(c_size_t),
+    cl_uint,
+    POINTER(cl_event),
+    POINTER(cl_event),
+]
+
+so.clEnqueueFillBuffer.restype = cl_int
+so.clEnqueueFillBuffer.argtypes = [
+    cl_command_queue,
+    cl_mem,
+    c_void_p,
+    c_size_t,
+    c_size_t,
+    c_size_t,
+    cl_uint,
+    POINTER(cl_event),
+    POINTER(cl_event),
+]
+
+so.clEnqueueWriteBuffer.restype = cl_int
+so.clEnqueueWriteBuffer.argtypes = [
+    cl_command_queue,
+    cl_mem,
+    cl_bool,
+    c_size_t,
+    c_size_t,
+    c_void_p,
+    cl_uint,
+    POINTER(cl_event),
+    POINTER(cl_event),
+]
+
+so.clEnqueueReadBuffer.restype = cl_int
+so.clEnqueueReadBuffer.argtypes = [
+    cl_command_queue,
+    cl_mem,
+    cl_bool,
+    c_size_t, c_size_t,
+    c_void_p,
+    cl_uint,
+    POINTER(cl_event),
+    POINTER(cl_event),
+]
+
+so.clFlush.restype = cl_int
+so.clFlush.argtypes = [cl_command_queue]
+
+so.clFinish.restype = cl_int
+so.clFinish.argtypes = [cl_command_queue]
+
+
+# Context
+so.clCreateContext.restype = cl_context
+so.clCreateContext.argtypes = [
+    POINTER(cl_context_properties),
+    cl_uint,
+    POINTER(cl_device_id),
+    c_void_p,
+    c_void_p,
+    POINTER(cl_int),
+]
+
+# Device
+so.clGetDeviceIDs.restype = cl_int
+so.clGetDeviceIDs.argtypes = [
+    cl_platform_id,
+    cl_device_type,
+    cl_uint,
+    POINTER(cl_device_id),
+    POINTER(cl_uint),
+]
+
+# Event
+so.clWaitForEvents.restype = cl_int
+so.clWaitForEvents.argtypes = [cl_uint, POINTER(cl_event)]
+
+# Kernel
+so.clCreateKernel.restype = cl_kernel
+so.clCreateKernel.argtypes = [cl_program, c_char_p, POINTER(cl_int)]
+
+so.clSetKernelArg.restype = cl_int
+so.clSetKernelArg.argtypes = [cl_kernel, cl_uint, c_size_t, c_void_p]
+
+# Mem
+so.clCreateBuffer.restype = cl_mem
+so.clCreateBuffer.argtypes = [
+    cl_context,
+    cl_mem_flags,
+    c_size_t,
+    c_void_p,
+    POINTER(cl_int),
+]
+
+# Platform
+so.clGetPlatformIDs.restype = cl_int
+so.clGetPlatformIDs.argtypes = [
+    cl_uint, POINTER(cl_platform_id), POINTER(cl_uint)
+]
+
+# Program
+so.clCreateProgramWithSource.restype = cl_program
+so.clCreateProgramWithSource.argtypes = [
+    cl_context,
+    cl_uint,
+    POINTER(c_char_p),
+    POINTER(c_size_t),
+    POINTER(cl_int),
+]
+
+so.clBuildProgram.restype = cl_int
+so.clBuildProgram.argtypes = [
+    cl_program,
+    cl_uint,
+    POINTER(cl_device_id),
+    c_char_p,
+    c_void_p,
+    c_void_p,
+]
+
+# Map types to info
+TYPE_DATA = {
+    (cl_command_queue,) : (
+        so.clGetCommandQueueInfo,
+        so.clReleaseCommandQueue,
+        CommandQueueInfo,
+        [cl_command_queue, cl_command_queue_info]
+    ),
+    (cl_context,) : (
+        so.clGetContextInfo,
+        so.clReleaseContext,
+        ContextInfo,
+        [cl_context, cl_context_info]
+    ),
+    (cl_device_id,) : (
+        so.clGetDeviceInfo,
+        so.clReleaseDevice,
+        DeviceInfo,
+        [cl_device_id, cl_device_info]
+    ),
+    (cl_event,) : (
+        so.clGetEventInfo,
+        so.clReleaseEvent,
+        EventInfo,
+        [cl_event, cl_event_info]
+    ),
+    (cl_kernel,) : (
+        so.clGetKernelInfo,
+        so.clReleaseKernel,
+        KernelInfo,
+        [cl_kernel, cl_kernel_info]
+    ),
+    (cl_kernel, int) : (
+        so.clGetKernelArgInfo,
+        so.clReleaseKernel,
+        KernelArgInfo,
+        [cl_kernel, cl_uint, cl_kernel_arg_info]
+    ),
+    (cl_mem,) : (
+        so.clGetMemObjectInfo,
+        so.clReleaseMemObject,
+        MemInfo,
+        [cl_mem, cl_mem_info]
+    ),
+    (cl_platform_id,) : (
+        so.clGetPlatformInfo,
+        None,
+        PlatformInfo,
+        [cl_platform_id, cl_platform_info]
+    ),
+    (cl_program,) : (
+        so.clGetProgramInfo,
+        so.clReleaseProgram,
+        ProgramInfo,
+        [cl_program, cl_program_info]
+    ),
+    (cl_program, cl_device_id) : (
+        so.clGetProgramBuildInfo,
+        None,
+        ProgramBuildInfo,
+        [cl_program, cl_device_id, cl_program_build_info]
+    )
 }
 
-OPTIONAL_INFO = {
-    ErrorCode.CL_INVALID_VALUE : {
-        CommandQueueInfo.CL_QUEUE_SIZE : -1
-    },
-    ErrorCode.CL_INVALID_COMMAND_QUEUE : {
-        CommandQueueInfo.CL_QUEUE_SIZE : -1
-    },
-    ErrorCode.CL_INVALID_PROGRAM_EXECUTABLE : {
-        ProgramInfo.CL_PROGRAM_NUM_KERNELS : 0,
-        ProgramInfo.CL_PROGRAM_KERNEL_NAMES : ""
-    }
-}
+# Automatically generate bindings for all clRelease* and clGet*Info
+# functions since they work basically the same.
+for ocl_types, (info_fun, rel_fun, _, info_args) in TYPE_DATA.items():
+    if rel_fun:
+        ocl_type = ocl_types[0]
+        rel_fun.restype = cl_int
+        rel_fun.argtypes = [ocl_type]
+    argtypes = info_args + [c_size_t, c_void_p, POINTER(c_size_t)]
+    info_fun.restype = cl_int
+    info_fun.argtypes = argtypes
 
 ########################################################################
-# Level 2: Functional API
+# Level 3: Functional API
 ########################################################################
 class OpenCLError(Exception):
     def __init__(self, code):
@@ -637,10 +661,10 @@ def size_and_fill(cl_fun, cl_size_tp, cl_el_tp, *args):
 
 def get_info(attr, *args):
     tps = tuple(type(a) for a in args)
-    cl_fun, info_enum = TYPE_INFO_GETTERS[tps]
+    cl_get_fun, _, info_enum, _ = TYPE_DATA[tps]
     args = args + (attr.value,)
     try:
-        buf = size_and_fill(cl_fun, c_size_t, c_byte, *args)
+        buf = size_and_fill(cl_get_fun, c_size_t, c_byte, *args)
     except OpenCLError as e:
         for ec, opt_attrs in OPTIONAL_INFO.items():
             if e.code == ec and attr in opt_attrs:
@@ -782,8 +806,9 @@ def build_program(prog, dev, opts, throw, print_log):
         check(err)
 
 def release(obj):
-    rel_fun = TYPE_RELEASERS[type(obj)]
-    check(rel_fun(obj))
+    tps = type(obj),
+    _, ocl_rel_fun, _, _ = TYPE_DATA[tps]
+    check(ocl_rel_fun(obj))
 
 
 ########################################################################
@@ -792,7 +817,7 @@ def release(obj):
 ########################################################################
 def get_details(*args):
     tps = tuple(type(a) for a in args)
-    _, info_enum = TYPE_INFO_GETTERS[tps]
+    _, _, info_enum, _ = TYPE_DATA[tps]
     return {k : get_info(k, *args) for k in info_enum}
 
 def get_kernel_names(prog):
