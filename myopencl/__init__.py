@@ -272,6 +272,7 @@ so.clBuildProgram.argtypes = [
 TYPE_RELEASERS = {
     cl_command_queue: so.clReleaseCommandQueue,
     cl_context: so.clReleaseContext,
+    cl_event: so.clReleaseEvent,
     cl_device_id: so.clReleaseDevice,
     cl_kernel: so.clReleaseKernel,
     cl_mem: so.clReleaseMemObject,

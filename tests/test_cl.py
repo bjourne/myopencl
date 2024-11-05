@@ -1,5 +1,6 @@
 # Copyright (C) 2024 Björn A. Lindqvist
 from humanize import metric
+from myopencl.objs import MyContext
 from pathlib import Path
 from time import time
 
@@ -60,7 +61,8 @@ def test_run_vecadd():
         ev = cl.enqueue_nd_range_kernel(queue, kern, [n_els], [max_wi_sizes[0]])
         cl.wait_for_events([ev])
     el_per_s = n_reps * n_els / (time() - st)
-    print('%s adds/s ' % metric(el_per_s), end = ' ')
+    el_per_s = metric(el_per_s)
+    print(f"{el_per_s} adds/s ", end = " ")
 
     c = np.zeros(n_els, dtype = np.float32)
     ptr = np.ctypeslib.as_ctypes(c)
@@ -77,3 +79,26 @@ def test_run_vecadd():
     ]
     for obj in objs:
         cl.release(obj)
+
+
+def test_objs():
+    ctx = MyContext(0, 0)
+    ctx.add_queue("main0")
+    ctx.add_queue("main1")
+
+    n_els = 10 * 1024 * 1024
+    arr1 = np.random.uniform(size = (n_els,)).astype(np.float32)
+    arr2 = np.zeros(n_els, dtype = np.float32)
+    c_ptr1 = np.ctypeslib.as_ctypes(arr1)
+    c_ptr2 = np.ctypeslib.as_ctypes(arr2)
+
+    ev1 = ctx.add_input_buffer("main0", "buf", arr1.nbytes, c_ptr1)
+    cl.wait_for_events([ev1])
+    ev2 = ctx.read_buffer("main1", "buf", arr1.nbytes, c_ptr2)
+    cl.wait_for_events([ev2])
+
+    for ev in [ev1, ev2]:
+        key = cl.EventInfo.CL_EVENT_COMMAND_EXECUTION_STATUS
+        val = cl.CommandExecutionStatus.CL_COMPLETE
+        assert cl.get_event_info(ev, key) == val
+    assert np.array_equal(arr1, arr2)
