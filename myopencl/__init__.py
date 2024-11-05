@@ -799,10 +799,8 @@ def build_program(prog, dev, opts, throw, print_log):
     if throw:
         check(err)
 
-
 def get_program_build_info(prog, dev, attr):
     return get_object_attr(so.clGetProgramBuildInfo, attr, prog, dev)
-
 
 def get_program_info(prog, attr):
     return get_object_attr(so.clGetProgramInfo, attr, prog)
@@ -835,7 +833,6 @@ def get_program_details(prog):
 def get_context_details(ctx):
     return {k: get_context_info(ctx, k) for k in ContextInfo}
 
-
 def get_kernel_details(kern):
     return {k: get_kernel_info(kern, k) for k in KernelInfo}
 
@@ -850,6 +847,12 @@ def get_mem_object_details(mem):
 def get_command_queue_details(mem):
     return {k: get_command_queue_info(mem, k) for k in CommandQueueInfo}
 
-
 def get_event_details(ev):
     return {k: get_event_info(ev, k) for k in EventInfo}
+
+def get_kernel_names(prog):
+    names = get_program_info(
+        prog,
+        ProgramInfo.CL_PROGRAM_KERNEL_NAMES
+    )
+    return [n for n in names.split(";") if n]

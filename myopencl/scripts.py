@@ -75,11 +75,7 @@ def build_program(filename, platform_index, include_paths):
     pp_dict(wrapper, cl.get_program_build_details(prog, dev))
     pp_dict(wrapper, cl.get_program_details(prog))
 
-    names = cl.get_program_info(
-        prog,
-        cl.ProgramInfo.CL_PROGRAM_KERNEL_NAMES
-    )
-    names = [n for n in names.split(";") if n]
+    names = cl.get_kernel_names(prog)
     kernels = [cl.create_kernel(prog, name) for name in names]
     for kernel in kernels:
         wrapper.initial_indent = INDENT_STR

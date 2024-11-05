@@ -101,8 +101,8 @@ def test_objs():
     status_key = cl.EventInfo.CL_EVENT_COMMAND_EXECUTION_STATUS
 
     ctx = MyContext(PLAT_IDX, 0)
-    ctx.add_queue("main0", [])
-    ctx.add_queue("main1", [])
+    ctx.create_queue("main0", [])
+    ctx.create_queue("main1", [])
 
     n_els = 10 * 1024 * 1024
     arr1 = np.random.uniform(size = (n_els,)).astype(np.float32)
@@ -110,7 +110,7 @@ def test_objs():
     c_ptr1 = np.ctypeslib.as_ctypes(arr1)
     c_ptr2 = np.ctypeslib.as_ctypes(arr2)
 
-    ev1 = ctx.add_input_buffer("main0", "buf", arr1.nbytes, c_ptr1)
+    ev1 = ctx.create_input_buffer("main0", "buf", arr1.nbytes, c_ptr1)
     cl.wait_for_events([ev1])
     ev2 = ctx.read_buffer("main1", "buf", arr1.nbytes, c_ptr2)
     cl.wait_for_events([ev2])
@@ -126,14 +126,14 @@ def test_ooo_queue():
     prop_val = cl.CommandQueueProperties.CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE
     props = [prop_key, prop_val]
     ctx = MyContext(PLAT_IDX, 0)
-    ctx.add_queue("main", props)
+    ctx.create_queue("main", props)
 
-    n_els = 10 * 1024 * 1024
+    n_els = 100 * 1024 * 1024
     arr = np.random.uniform(size = (n_els,)).astype(np.float32)
     c_ptr = np.ctypeslib.as_ctypes(arr)
 
-    ev1 = ctx.add_input_buffer("main", "buf1", arr.nbytes, c_ptr)
-    ev2 = ctx.add_input_buffer("main", "buf2", arr.nbytes, c_ptr)
+    ev1 = ctx.create_input_buffer("main", "buf1", arr.nbytes, c_ptr)
+    ev2 = ctx.create_input_buffer("main", "buf2", arr.nbytes, c_ptr)
 
     # Since the queue is out of order both events should run.
     statuses = {
@@ -152,7 +152,7 @@ def write_torch_tensor(ctx, q_name, buf_name, x):
 
     tp = TORCH_TO_CTYPES[x.dtype]
     c_ptr = ctypes.cast(x.data_ptr(), ctypes.POINTER(tp))
-    return ctx.add_input_buffer(q_name, buf_name, x.nbytes, c_ptr)
+    return ctx.create_input_buffer(q_name, buf_name, x.nbytes, c_ptr)
 
 def read_torch_tensor(ctx, q_name, buf_name, x):
     assert x.is_contiguous()
@@ -167,12 +167,23 @@ def test_torch_tensors():
     new = torch.empty_like(orig)
 
     ctx = MyContext(PLAT_IDX, 0)
-    ctx.add_queue("main", [])
+    ctx.create_queue("main", [])
 
     ev1 = write_torch_tensor(ctx, "main", "x", orig)
     ev2 = read_torch_tensor(ctx, "main", "x", new)
     cl.wait_for_events([ev1, ev2])
-    ctx.print()
+
     assert torch.sum(new - orig) == 0.0
+    ctx.finish_and_release()
+
+def test_conv2d():
+    ctx = MyContext(PLAT_IDX, 0)
+    ctx.create_queue("main", [])
+
+    x = torch.randn((64, 3, 3, 3))
+    ev1 = write_torch_tensor(ctx, "main", "x", x)
+
+    path = Path("kernels/conv2d.cl")
+    ctx.create_program_and_kernels("conv2d", path)
 
     ctx.finish_and_release()

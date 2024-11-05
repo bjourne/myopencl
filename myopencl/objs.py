@@ -23,8 +23,21 @@ class MyContext:
         self.queues = {}
         self.bufs = {}
         self.events = {}
+        self.programs = {}
+        self.kernels = {}
 
-    def add_queue(self, name, props):
+    def create_program_and_kernels(self, name, path):
+        source = path.read_text("utf-8")
+        prog = cl.create_program_with_source(self.ctx, source)
+        opts = "-Werror -cl-std=CL2.0"
+        cl.build_program(prog, self.dev_id, opts, True, True)
+        self.programs[name] = prog
+
+        for kname in cl.get_kernel_names(prog):
+            kern = cl.create_kernel(prog, kname)
+            self.kernels[f"{name}/{kname}"] = kern
+
+    def create_queue(self, name, props):
         q = cl.create_command_queue_with_properties(
             self.ctx, self.dev_id, props
         )
@@ -34,10 +47,18 @@ class MyContext:
         for queue in self.queues.values():
             cl.flush(queue)
             cl.finish(queue)
-        cl_objs = list(self.events.values()) \
-            + list(self.bufs.values()) \
-            + list(self.queues.values()) \
-            + [self.ctx, self.dev_id]
+
+        cl_objs = []
+        dicts = [
+            self.events,
+            self.kernels,
+            self.programs,
+            self.bufs,
+            self.queues
+        ]
+        for d in dicts:
+            cl_objs.extend(list(d.values()))
+        cl_objs.extend([self.ctx, self.dev_id])
         for cl_obj in cl_objs:
             cl.release(cl_obj)
 
@@ -53,16 +74,23 @@ class MyContext:
         for name, queue in self.queues.items():
             data.append((f"Queue: {name}", cl.get_command_queue_details(queue)))
 
+        for name, prog in self.programs.items():
+            d = cl.get_program_details(prog)
+            d.update(cl.get_program_build_details(prog, self.dev_id))
+            data.append((f"Program: {name}", d))
+        for name, kern in self.kernels.items():
+            data.append((f"Kernel: {name}", cl.get_kernel_details(kern)))
         for name, mem in self.bufs.items():
             data.append((f"Buffer: {name}", cl.get_mem_object_details(mem)))
         for name, ev in self.events.items():
             data.append((f"Event: {name}", cl.get_event_details(ev)))
 
+
         for header, d in data:
             pp_dict_with_header(header, wrap, d)
 
     # Reading and writing buffers
-    def add_input_buffer(self, q_name, buf_name, n_bytes, c_ptr):
+    def create_input_buffer(self, q_name, buf_name, n_bytes, c_ptr):
         buf = cl.create_buffer(
             self.ctx, cl.MemFlags.CL_MEM_READ_ONLY, n_bytes
         )
