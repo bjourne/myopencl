@@ -1,4 +1,4 @@
-# Copyright (C) Björn A. Lindqvist 2024
+# Copyright (C) 2024 Björn A. Lindqvist
 from enum import Enum
 from humanize import naturalsize
 from os import get_terminal_size
@@ -33,12 +33,12 @@ def pp_enum_val(wrapper, key, val):
     else:
         val = [val]
 
-    base_fmt = "%%-%ds: %%s" % KEY_LEN
+    base_fmt = f"%-{KEY_LEN}s: %s"
     s = base_fmt % (key.name, val[0])
     print(wrapper.fill(s))
     more_pf = " " * (KEY_LEN + 2)
     for line in val[1:]:
-        print("%s%s" % (more_pf, line))
+        print(f"{more_pf}{line}")
 
 
 def pp_dict(wrapper, d):
@@ -58,7 +58,7 @@ def terminal_wrapper():
 @click.pass_context
 @click.version_option(package_name = "myopencl")
 def cli(ctx):
-    pass
+    assert ctx
 
 @cli.command()
 def list_platforms():
@@ -97,7 +97,7 @@ def build_program(filename, platform_index, include_paths):
     """Build an OpenCL program and list its details."""
     path = Path(filename)
 
-    source = path.read_text()
+    source = path.read_text("utf-8")
 
     plat_id = cl.get_platform_ids()[platform_index]
     dev = cl.get_device_ids(plat_id)[0]
@@ -105,15 +105,15 @@ def build_program(filename, platform_index, include_paths):
 
     dev_name = cl.get_device_info(dev, cl.DeviceInfo.CL_DEVICE_NAME)
     dev_driver = cl.get_device_info(dev, cl.DeviceInfo.CL_DRIVER_VERSION)
-    print("OpenCL program: %s" % path)
-    print("Device        : %s" % dev_name)
-    print("Driver        : %s" % dev_driver)
+    print(f"OpenCL program: {path}")
+    print(f"Device        : {dev_name}")
+    print(f"Driver        : {dev_driver}")
 
     prog = cl.create_program_with_source(ctx, source)
     opts = [
         '-Werror',
         '-cl-std=CL2.0'
-    ] + ['-I %s' % ip for ip in include_paths]
+    ] + [f"-I {ip}" for ip in include_paths]
     cl.build_program(prog, dev, " ".join(opts), True, True)
 
     wrapper = terminal_wrapper()

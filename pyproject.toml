@@ -1,3 +1,4 @@
+# Copyright (C) 2024 Björn A. Lindqvist
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -10,10 +11,11 @@ authors = [
     {name = "Björn A. Lindqvist"}
 ]
 classifiers = [
-    "Programming Language :: Python"
+    "Programming Language :: Python",
+    "Operating System :: OS Independent"
 ]
 dependencies = [
-    "click", "humanize"
+    "click"
 ]
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -21,5 +23,28 @@ license = {file = "LICENSE"}
 [project.urls]
 homepage = "https://github.com/bjourne/myopencl"
 
+[project.optional-dependencies]
+test = [
+    "humanize",
+    "pytest>=5.0.0"
+]
+
 [project.scripts]
 mcl-tool = "myopencl.scripts:main"
+
+[tool.pylint.format]
+max-line-length = 80
+
+[tool.pylint."messages control"]
+disable = """
+    invalid-name,
+    missing-docstring,
+    no-value-for-parameter,
+    protected-access,
+    redefined-outer-name,
+    too-few-public-methods,
+    too-many-arguments,
+    too-many-locals,
+    too-many-positional-arguments,
+    wrong-import-order
+    """

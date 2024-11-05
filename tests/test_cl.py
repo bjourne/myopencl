@@ -1,3 +1,4 @@
+# Copyright (C) 2024 Björn A. Lindqvist
 from humanize import metric
 from pathlib import Path
 from time import time
@@ -39,7 +40,7 @@ def test_run_vecadd():
     ev2 = cl.enqueue_fill_buffer(queue, mem_b, el_tp(2.5), 0, n_bytes)
     cl.wait_for_events([ev1, ev2])
 
-    source = VECADD.read_text()
+    source = VECADD.read_text("utf-8")
     prog = cl.create_program_with_source(ctx, source)
     cl.build_program(prog, dev, "-Werror -cl-std=CL2.0", True, True)
     kern = cl.create_kernel(prog, "vecadd")
@@ -52,7 +53,7 @@ def test_run_vecadd():
         dev, cl.DeviceInfo.CL_DEVICE_MAX_WORK_ITEM_SIZES
     )
 
-    n_reps = 100
+    n_reps = 50
 
     st = time()
     for _ in range(n_reps):

@@ -11,11 +11,11 @@ class Opaque(Structure):
 
 
 def OPAQUE_POINTER(name="opaque"):
-    class cls(Opaque):
+    class Cls(Opaque):
         pass
 
-    cls.__name__ = name
-    ptr = POINTER(cls)
+    Cls.__name__ = name
+    ptr = POINTER(Cls)
     return ptr
 
 
@@ -243,7 +243,9 @@ so.clCreateBuffer.argtypes = [
 
 # Platform
 so.clGetPlatformIDs.restype = cl_int
-so.clGetPlatformIDs.argtypes = [cl_uint, POINTER(cl_platform_id), POINTER(cl_uint)]
+so.clGetPlatformIDs.argtypes = [
+    cl_uint, POINTER(cl_platform_id), POINTER(cl_uint)
+]
 
 # Program
 so.clCreateProgramWithSource.restype = cl_program
@@ -276,9 +278,9 @@ TYPE_RELEASERS = {
     cl_program: so.clReleaseProgram,
 }
 
-for ocl_type, fun in TYPE_RELEASERS.items():
-    setattr(fun, "restype", cl_int)
-    setattr(fun, "argtypes", [ocl_type])
+for ocl_type, ocl_fun in TYPE_RELEASERS.items():
+    setattr(ocl_fun, "restype", cl_int)
+    setattr(ocl_fun, "argtypes", [ocl_type])
 
 # Automatically generate level 0 bindings for functions to get object
 # info.
@@ -290,22 +292,24 @@ TYPE_INFOS = [
     (so.clGetKernelArgInfo, [cl_kernel, cl_uint, cl_kernel_arg_info]),
     (so.clGetMemObjectInfo, [cl_mem, cl_mem_info]),
     (so.clGetPlatformInfo, [cl_platform_id, cl_platform_info]),
-    (so.clGetProgramBuildInfo, [cl_program, cl_device_id, cl_program_build_info]),
+    (so.clGetProgramBuildInfo, [
+        cl_program, cl_device_id, cl_program_build_info
+    ]),
     (so.clGetProgramInfo, [cl_program, cl_program_info])
 ]
-for fun, args in TYPE_INFOS:
+for ocl_fun, args in TYPE_INFOS:
     args = args + [c_size_t, c_void_p, POINTER(c_size_t)]
-    setattr(fun, "restype", cl_int)
-    setattr(fun, "argtypes", args)
+    setattr(ocl_fun, "restype", cl_int)
+    setattr(ocl_fun, "argtypes", args)
 
 ########################################################################
 # Level 1: Pythonic enumerations and bitfieds
 ########################################################################
 class InfoEnum(Enum):
-    def __new__(cls, val, type):
+    def __new__(cls, val, tp):
         obj = object.__new__(cls)
         obj._value_ = val
-        obj.type = type
+        obj.type = tp
         return obj
 
 
@@ -573,7 +577,7 @@ OPTIONAL_INFO = {
 ########################################################################
 class OpenCLError(Exception):
     def __init__(self, code):
-        super().__init__("%s = %d" % (code, code.value))
+        super().__init__(f"{code} {code.value}")
         self.code = code
 
 
@@ -597,7 +601,6 @@ def cl_info_to_py(tp, buf):
         to_type = tp._type_
         if issubclass(to_type, Opaque):
             return tp.from_buffer(buf)
-        el_size = sizeof(to_type)
         n_el = sizeof(buf) // sizeof(to_type)
         tp_buf = cast(buf, POINTER(to_type * n_el)).contents
         val = list(tp_buf)
@@ -718,13 +721,15 @@ def get_context_info(ctx, attr):
 
 
 # Device
-def get_device_info(id, attr):
-    return get_object_attr(so.clGetDeviceInfo, attr, id)
+def get_device_info(dev_id, attr):
+    return get_object_attr(so.clGetDeviceInfo, attr, dev_id)
 
 
 def get_device_ids(plat_id):
     dev_type = DeviceType.CL_DEVICE_TYPE_ALL.value
-    return size_and_fill(so.clGetDeviceIDs, cl_uint, cl_device_id, plat_id, dev_type)
+    return size_and_fill(
+        so.clGetDeviceIDs, cl_uint, cl_device_id, plat_id, dev_type
+    )
 
 
 # Event
@@ -769,8 +774,8 @@ def get_platform_ids():
     return size_and_fill(so.clGetPlatformIDs, cl_uint, cl_platform_id)
 
 
-def get_platform_info(id, attr):
-    return get_object_attr(so.clGetPlatformInfo, attr, id)
+def get_platform_info(plat_id, attr):
+    return get_object_attr(so.clGetPlatformInfo, attr, plat_id)
 
 
 # Program
@@ -784,7 +789,8 @@ def build_program(prog, dev, opts, throw, print_log):
     opts = create_string_buffer(opts.encode("utf-8"))
     err = so.clBuildProgram(prog, 1, pointer(dev), opts, None, None)
     if err != 0 and print_log:
-        log = get_program_build_info(prog, dev, ProgramBuildInfo.CL_PROGRAM_BUILD_LOG)
+        attr = ProgramBuildInfo.CL_PROGRAM_BUILD_LOG
+        log = get_program_build_info(prog, dev, attr)
         print(log)
     if throw:
         check(err)
@@ -807,12 +813,12 @@ def release(obj):
 # Level 3: Holistic functions that calls more than one OpenCL function
 # or calls the same OpenCL function in a loop
 ########################################################################
-def get_platform_details(id):
-    return {key: get_platform_info(id, key) for key in PlatformInfo}
+def get_platform_details(plat_id):
+    return {key: get_platform_info(plat_id, key) for key in PlatformInfo}
 
 
-def get_device_details(id):
-    return {key: get_device_info(id, key) for key in DeviceInfo}
+def get_device_details(dev_id):
+    return {key: get_device_info(dev_id, key) for key in DeviceInfo}
 
 
 def get_program_build_details(prog, dev):
