@@ -7,9 +7,14 @@ from time import time
 import ctypes
 import myopencl as cl
 import numpy as np
+import torch
 
-PLAT_IDX = 1
+PLAT_IDX = 0
 VECADD = Path("kernels/vecadd.cl")
+
+TORCH_TO_CTYPES = {
+    torch.float32 : ctypes.c_float
+}
 
 def test_release_none():
     try:
@@ -130,7 +135,7 @@ def test_ooo_queue():
     ev1 = ctx.add_input_buffer("main", "buf1", arr.nbytes, c_ptr)
     ev2 = ctx.add_input_buffer("main", "buf2", arr.nbytes, c_ptr)
 
-    # Since the queue is out of order both events should be running.
+    # Since the queue is out of order both events should run.
     statuses = {
         cl.CommandExecutionStatus.CL_SUBMITTED,
         cl.CommandExecutionStatus.CL_RUNNING
@@ -139,4 +144,35 @@ def test_ooo_queue():
     assert (cl.get_event_info(ev1, key) in statuses and
             cl.get_event_info(ev2, key) in statuses)
     cl.wait_for_events([ev1, ev2])
+    ctx.finish_and_release()
+
+def write_torch_tensor(ctx, q_name, buf_name, x):
+    assert x.is_contiguous()
+    assert x.is_cpu
+
+    tp = TORCH_TO_CTYPES[x.dtype]
+    c_ptr = ctypes.cast(x.data_ptr(), ctypes.POINTER(tp))
+    return ctx.add_input_buffer(q_name, buf_name, x.nbytes, c_ptr)
+
+def read_torch_tensor(ctx, q_name, buf_name, x):
+    assert x.is_contiguous()
+    assert x.is_cpu
+
+    tp = TORCH_TO_CTYPES[x.dtype]
+    c_ptr = ctypes.cast(x.data_ptr(), ctypes.POINTER(tp))
+    return ctx.read_buffer(q_name, buf_name, x.nbytes, c_ptr)
+
+def test_torch_tensors():
+    orig = torch.randn((64, 3, 3, 3, 25))
+    new = torch.empty_like(orig)
+
+    ctx = MyContext(PLAT_IDX, 0)
+    ctx.add_queue("main", [])
+
+    ev1 = write_torch_tensor(ctx, "main", "x", orig)
+    ev2 = read_torch_tensor(ctx, "main", "x", new)
+    cl.wait_for_events([ev1, ev2])
+    ctx.print()
+    assert torch.sum(new - orig) == 0.0
+
     ctx.finish_and_release()

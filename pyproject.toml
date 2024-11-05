@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 [project]
 name = "myopencl"
 version = "0.0.1"
-description = "Small OpenCL wrapper baaased on ctypes"
+description = "Small OpenCL wrapper based on ctypes"
 authors = [
     {name = "Björn A. Lindqvist"}
 ]
