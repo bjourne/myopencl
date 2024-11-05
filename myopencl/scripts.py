@@ -23,13 +23,13 @@ def list_platforms():
     for plat_id in cl.get_platform_ids():
         wrapper.initial_indent = ""
         wrapper.subsequent_indent = wrapper.initial_indent + INDENT_STR
-        details = cl.get_platform_details(plat_id)
+        details = cl.get_details(plat_id)
         pp_dict(wrapper, details)
         wrapper.initial_indent = INDENT_STR
         wrapper.subsequent_indent = wrapper.initial_indent + INDENT_STR
         dev_ids = cl.get_device_ids(plat_id)
         for dev_id in dev_ids:
-            details = cl.get_device_details(dev_id)
+            details = cl.get_details(dev_id)
             pp_dict(wrapper, details)
             cl.release(dev_id)
 
@@ -57,8 +57,8 @@ def build_program(filename, platform_index, include_paths):
     dev = cl.get_device_ids(plat_id)[0]
     ctx = cl.create_context(dev)
 
-    dev_name = cl.get_device_info(dev, cl.DeviceInfo.CL_DEVICE_NAME)
-    dev_driver = cl.get_device_info(dev, cl.DeviceInfo.CL_DRIVER_VERSION)
+    dev_name = cl.get_info(cl.DeviceInfo.CL_DEVICE_NAME, dev)
+    dev_driver = cl.get_info(cl.DeviceInfo.CL_DRIVER_VERSION, dev)
     print(f"OpenCL program: {path}")
     print(f"Device        : {dev_name}")
     print(f"Driver        : {dev_driver}")
@@ -71,19 +71,19 @@ def build_program(filename, platform_index, include_paths):
     cl.build_program(prog, dev, " ".join(opts), True, True)
 
     wrapper = terminal_wrapper()
-    pp_dict(wrapper, cl.get_context_details(ctx))
-    pp_dict(wrapper, cl.get_program_build_details(prog, dev))
-    pp_dict(wrapper, cl.get_program_details(prog))
+    pp_dict(wrapper, cl.get_details(ctx))
+    pp_dict(wrapper, cl.get_details(prog, dev))
+    pp_dict(wrapper, cl.get_details(prog))
 
     names = cl.get_kernel_names(prog)
     kernels = [cl.create_kernel(prog, name) for name in names]
     for kernel in kernels:
         wrapper.initial_indent = INDENT_STR
-        pp_dict(wrapper, cl.get_kernel_details(kernel))
-        n_args = cl.get_kernel_info(kernel, cl.KernelInfo.CL_KERNEL_NUM_ARGS)
+        pp_dict(wrapper, cl.get_details(kernel))
+        n_args = cl.get_info(cl.KernelInfo.CL_KERNEL_NUM_ARGS, kernel)
         wrapper.initial_indent = 2 * INDENT_STR
         for i in range(n_args):
-            pp_dict(wrapper, cl.get_kernel_arg_details(kernel, i))
+            pp_dict(wrapper, cl.get_details(kernel, i))
 
     for kernel in kernels:
         cl.release(kernel)

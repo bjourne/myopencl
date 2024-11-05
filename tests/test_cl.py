@@ -34,7 +34,7 @@ def test_get_queue_size():
         for dev_id in cl.get_device_ids(plat_id):
             ctx = cl.create_context(dev_id)
             q = cl.create_command_queue_with_properties(ctx, dev_id, [])
-            assert cl.get_command_queue_info(q, attr) == -1
+            assert cl.get_info(attr, q) == -1
             for o in [ctx, dev_id]:
                 cl.release(o)
 
@@ -66,8 +66,8 @@ def test_run_vecadd():
     cl.set_kernel_arg(kern, 1, mem_b)
     cl.set_kernel_arg(kern, 2, mem_c)
 
-    max_wi_sizes = cl.get_device_info(
-        dev, cl.DeviceInfo.CL_DEVICE_MAX_WORK_ITEM_SIZES
+    max_wi_sizes = cl.get_info(
+        cl.DeviceInfo.CL_DEVICE_MAX_WORK_ITEM_SIZES, dev
     )
 
     n_reps = 50
@@ -117,7 +117,7 @@ def test_objs():
 
     for ev in [ev1, ev2]:
         val = cl.CommandExecutionStatus.CL_COMPLETE
-        assert cl.get_event_info(ev, status_key) == val
+        assert cl.get_info(status_key, ev) == val
     assert np.array_equal(arr1, arr2)
     ctx.finish_and_release()
 
@@ -141,8 +141,8 @@ def test_ooo_queue():
         cl.CommandExecutionStatus.CL_RUNNING
     }
     key = cl.EventInfo.CL_EVENT_COMMAND_EXECUTION_STATUS
-    assert (cl.get_event_info(ev1, key) in statuses and
-            cl.get_event_info(ev2, key) in statuses)
+    assert (cl.get_info(key, ev1) in statuses and
+            cl.get_info(key, ev2) in statuses)
     cl.wait_for_events([ev1, ev2])
     ctx.finish_and_release()
 
@@ -185,5 +185,7 @@ def test_conv2d():
 
     path = Path("kernels/conv2d.cl")
     ctx.create_program_and_kernels("conv2d", path)
+
+    ctx.print()
 
     ctx.finish_and_release()

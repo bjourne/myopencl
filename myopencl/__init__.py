@@ -560,7 +560,19 @@ cl_type_to_python_type = {
     cl_kernel_arg_type_qualifier : KernelArgTypeQualifier,
     cl_mem_flags: MemFlags,
     cl_mem_object_type: MemObjectType,
+}
 
+TYPE_INFO_GETTERS = {
+    (cl_command_queue,) : (so.clGetCommandQueueInfo, CommandQueueInfo),
+    (cl_context,) : (so.clGetContextInfo, ContextInfo),
+    (cl_device_id,) : (so.clGetDeviceInfo, DeviceInfo),
+    (cl_event,) : (so.clGetEventInfo, EventInfo),
+    (cl_kernel,) : (so.clGetKernelInfo, KernelInfo),
+    (cl_kernel, int) : (so.clGetKernelArgInfo, KernelArgInfo),
+    (cl_mem,) : (so.clGetMemObjectInfo, MemInfo),
+    (cl_platform_id,) : (so.clGetPlatformInfo, PlatformInfo),
+    (cl_program,) : (so.clGetProgramInfo, ProgramInfo),
+    (cl_program, cl_device_id) : (so.clGetProgramBuildInfo, ProgramBuildInfo)
 }
 
 OPTIONAL_INFO = {
@@ -623,8 +635,9 @@ def size_and_fill(cl_fun, cl_size_tp, cl_el_tp, *args):
     check(cl_fun(*args, n, buf, None))
     return buf
 
-
-def get_object_attr(cl_fun, attr, *args):
+def get_info(attr, *args):
+    tps = tuple(type(a) for a in args)
+    cl_fun, info_enum = TYPE_INFO_GETTERS[tps]
     args = args + (attr.value,)
     try:
         buf = size_and_fill(cl_fun, c_size_t, c_byte, *args)
@@ -635,11 +648,7 @@ def get_object_attr(cl_fun, attr, *args):
         raise e
     return cl_info_to_py(attr.type, buf)
 
-
 # Command queue
-def get_command_queue_info(queue, attr):
-    return get_object_attr(so.clGetCommandQueueInfo, attr, queue)
-
 
 # This function is bonkers
 def create_command_queue_with_properties(ctx, dev, lst):
@@ -720,15 +729,7 @@ def create_context(dev_id):
     return check_last(so.clCreateContext, None, 1, byref(dev_id), None, None)
 
 
-def get_context_info(ctx, attr):
-    return get_object_attr(so.clGetContextInfo, attr, ctx)
-
-
 # Device
-def get_device_info(dev_id, attr):
-    return get_object_attr(so.clGetDeviceInfo, attr, dev_id)
-
-
 def get_device_ids(plat_id):
     dev_type = DeviceType.CL_DEVICE_TYPE_ALL.value
     return size_and_fill(
@@ -737,10 +738,6 @@ def get_device_ids(plat_id):
 
 
 # Event
-def get_event_info(ev, attr):
-    return get_object_attr(so.clGetEventInfo, attr, ev)
-
-
 def wait_for_events(evs):
     n = len(evs)
     evs = (cl_event * n)(*evs)
@@ -752,23 +749,11 @@ def create_kernel(prog, name):
     name = create_string_buffer(name.encode("utf-8"))
     return check_last(so.clCreateKernel, prog, name)
 
-
-def get_kernel_info(kern, attr):
-    return get_object_attr(so.clGetKernelInfo, attr, kern)
-
-def get_kernel_arg_info(kern, i, attr):
-    return get_object_attr(so.clGetKernelArgInfo, attr, kern, i)
-
-
 def set_kernel_arg(kern, i, arg):
     check(so.clSetKernelArg(kern, i, sizeof(arg), byref(arg)))
 
 
 # Mem
-def get_mem_object_info(mem, attr):
-    return get_object_attr(so.clGetMemObjectInfo, attr, mem)
-
-
 def create_buffer(ctx, flags, n_bytes):
     return check_last(so.clCreateBuffer, ctx, flags.value, n_bytes, None)
 
@@ -777,9 +762,6 @@ def create_buffer(ctx, flags, n_bytes):
 def get_platform_ids():
     return size_and_fill(so.clGetPlatformIDs, cl_uint, cl_platform_id)
 
-
-def get_platform_info(plat_id, attr):
-    return get_object_attr(so.clGetPlatformInfo, attr, plat_id)
 
 
 # Program
@@ -799,13 +781,6 @@ def build_program(prog, dev, opts, throw, print_log):
     if throw:
         check(err)
 
-def get_program_build_info(prog, dev, attr):
-    return get_object_attr(so.clGetProgramBuildInfo, attr, prog, dev)
-
-def get_program_info(prog, attr):
-    return get_object_attr(so.clGetProgramInfo, attr, prog)
-
-
 def release(obj):
     rel_fun = TYPE_RELEASERS[type(obj)]
     check(rel_fun(obj))
@@ -815,44 +790,14 @@ def release(obj):
 # Level 3: Holistic functions that calls more than one OpenCL function
 # or calls the same OpenCL function in a loop
 ########################################################################
-def get_platform_details(plat_id):
-    return {key: get_platform_info(plat_id, key) for key in PlatformInfo}
-
-
-def get_device_details(dev_id):
-    return {key: get_device_info(dev_id, key) for key in DeviceInfo}
-
-
-def get_program_build_details(prog, dev):
-    return {k: get_program_build_info(prog, dev, k) for k in ProgramBuildInfo}
-
-def get_program_details(prog):
-    return {k: get_program_info(prog, k) for k in ProgramInfo}
-
-
-def get_context_details(ctx):
-    return {k: get_context_info(ctx, k) for k in ContextInfo}
-
-def get_kernel_details(kern):
-    return {k: get_kernel_info(kern, k) for k in KernelInfo}
-
-def get_kernel_arg_details(kern, i):
-    return {k: get_kernel_arg_info(kern, i, k) for k in KernelArgInfo}
-
-
-def get_mem_object_details(mem):
-    return {k: get_mem_object_info(mem, k) for k in MemInfo}
-
-
-def get_command_queue_details(mem):
-    return {k: get_command_queue_info(mem, k) for k in CommandQueueInfo}
-
-def get_event_details(ev):
-    return {k: get_event_info(ev, k) for k in EventInfo}
+def get_details(*args):
+    tps = tuple(type(a) for a in args)
+    _, info_enum = TYPE_INFO_GETTERS[tps]
+    return {k : get_info(k, *args) for k in info_enum}
 
 def get_kernel_names(prog):
-    names = get_program_info(
-        prog,
-        ProgramInfo.CL_PROGRAM_KERNEL_NAMES
+    names = get_info(
+        ProgramInfo.CL_PROGRAM_KERNEL_NAMES,
+        prog
     )
     return [n for n in names.split(";") if n]

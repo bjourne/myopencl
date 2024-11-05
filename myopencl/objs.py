@@ -67,23 +67,23 @@ class MyContext:
         wrap.subsequent_indent = wrap.initial_indent + INDENT_STR
 
         data = [
-            ("Platform", cl.get_platform_details(self.plat_id)),
-            ("Device", cl.get_device_details(self.dev_id)),
-            ("Context", cl.get_context_details(self.ctx))
+            ("Platform", cl.get_details(self.plat_id)),
+            ("Device", cl.get_details(self.dev_id)),
+            ("Context", cl.get_details(self.ctx))
         ]
         for name, queue in self.queues.items():
-            data.append((f"Queue: {name}", cl.get_command_queue_details(queue)))
+            data.append((f"Queue: {name}", cl.get_details(queue)))
 
         for name, prog in self.programs.items():
-            d = cl.get_program_details(prog)
-            d.update(cl.get_program_build_details(prog, self.dev_id))
+            d = cl.get_details(prog)
+            d.update(cl.get_details(prog, self.dev_id))
             data.append((f"Program: {name}", d))
         for name, kern in self.kernels.items():
-            data.append((f"Kernel: {name}", cl.get_kernel_details(kern)))
+            data.append((f"Kernel: {name}", cl.get_details(kern)))
         for name, mem in self.bufs.items():
-            data.append((f"Buffer: {name}", cl.get_mem_object_details(mem)))
+            data.append((f"Buffer: {name}", cl.get_details(mem)))
         for name, ev in self.events.items():
-            data.append((f"Event: {name}", cl.get_event_details(ev)))
+            data.append((f"Event: {name}", cl.get_details(ev)))
 
 
         for header, d in data:
