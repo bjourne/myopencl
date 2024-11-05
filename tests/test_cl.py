@@ -21,14 +21,14 @@ def test_release_device():
     cl.release(dev_id)
 
 def test_run_vecadd():
-    plat_id = cl.get_platform_ids()[1]
+    plat_id = cl.get_platform_ids()[0]
     dev = cl.get_device_ids(plat_id)[0]
 
     ctx = cl.create_context(dev)
     queue = cl.create_command_queue_with_properties(ctx, dev, [])
 
     el_tp = ctypes.c_float
-    n_els = 100 * 1000 * 1024
+    n_els = 10 * 1000 * 1024
     el_size = ctypes.sizeof(el_tp)
     n_bytes = n_els * el_size
     mem_a = cl.create_buffer(ctx, cl.MemFlags.CL_MEM_READ_ONLY, n_bytes)
@@ -41,7 +41,7 @@ def test_run_vecadd():
 
     source = VECADD.read_text()
     prog = cl.create_program_with_source(ctx, source)
-    cl.build_program(prog, dev, "-Werror", True, True)
+    cl.build_program(prog, dev, "-Werror -cl-std=CL2.0", True, True)
     kern = cl.create_kernel(prog, "vecadd")
 
     cl.set_kernel_arg(kern, 0, mem_a)

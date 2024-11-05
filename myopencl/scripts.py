@@ -104,11 +104,12 @@ def build_program(filename, platform_index, include_paths):
     ctx = cl.create_context(dev)
 
     dev_name = cl.get_device_info(dev, cl.DeviceInfo.CL_DEVICE_NAME)
+    dev_driver = cl.get_device_info(dev, cl.DeviceInfo.CL_DRIVER_VERSION)
     print("OpenCL program: %s" % path)
     print("Device        : %s" % dev_name)
+    print("Driver        : %s" % dev_driver)
 
     prog = cl.create_program_with_source(ctx, source)
-
     opts = [
         '-Werror',
         '-cl-std=CL2.0'
@@ -119,12 +120,12 @@ def build_program(filename, platform_index, include_paths):
     pp_dict(wrapper, cl.get_context_details(ctx))
     pp_dict(wrapper, cl.get_program_build_details(prog, dev))
     pp_dict(wrapper, cl.get_program_details(prog))
+
     names = cl.get_program_info(
         prog,
         cl.ProgramInfo.CL_PROGRAM_KERNEL_NAMES
     )
-    names = names.split(";")
-
+    names = [n for n in names.split(";") if n]
     kernels = [cl.create_kernel(prog, name) for name in names]
     for kernel in kernels:
         wrapper.initial_indent = INDENT_STR

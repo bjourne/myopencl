@@ -396,6 +396,8 @@ class DeviceInfo(InfoEnum):
 
     CL_DEVICE_NAME = 0x102B, c_char_p
     CL_DEVICE_VENDOR = 0x102C, c_char_p
+    CL_DRIVER_VERSION = 0x102D, c_char_p
+    CL_DEVICE_PROFILE = 0x102E, c_char_p
     CL_DEVICE_PRINTF_BUFFER_SIZE = 0x1049, c_size_t
 
     CL_DEVICE_BUILT_IN_KERNELS = 0x103F, c_char_p
@@ -436,6 +438,7 @@ class ErrorCode(Enum):
     CL_INVALID_HOST_PTR = -37
     CL_INVALID_MEM_OBJECT = -38
     CL_INVALID_PROGRAM = -44
+    CL_INVALID_PROGRAM_EXECUTABLE = -45
     CL_INVALID_KERNEL_NAME = -46
     CL_INVALID_ARG_INDEX = -49
     CL_INVALID_ARG_VALUE = -50
@@ -555,9 +558,15 @@ cl_type_to_python_type = {
 
 }
 
-# All the enums that are not necessarily in OpenCL 1.2
-optional_info = {CommandQueueInfo.CL_QUEUE_SIZE}
-
+OPTIONAL_INFO = {
+    ErrorCode.CL_INVALID_VALUE : {
+        CommandQueueInfo.CL_QUEUE_SIZE : -1
+    },
+    ErrorCode.CL_INVALID_PROGRAM_EXECUTABLE : {
+        ProgramInfo.CL_PROGRAM_NUM_KERNELS : 0,
+        ProgramInfo.CL_PROGRAM_KERNEL_NAMES : ""
+    }
+}
 
 ########################################################################
 # Level 2: Functional API
@@ -613,8 +622,9 @@ def get_object_attr(cl_fun, attr, *args):
     try:
         buf = size_and_fill(cl_fun, c_size_t, c_byte, *args)
     except OpenCLError as e:
-        if e.code == ErrorCode.CL_INVALID_VALUE and attr in optional_info:
-            return None
+        for ec, opt_attrs in OPTIONAL_INFO.items():
+            if e.code == ec and attr in opt_attrs:
+                return opt_attrs[attr]
         raise e
     return cl_info_to_py(attr.type, buf)
 
