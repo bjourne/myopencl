@@ -11,7 +11,6 @@ import myopencl as cl
 import numpy as np
 import torch
 
-PLAT_IDX = 1
 VECADD = Path("kernels/vecadd.cl")
 
 ########################################################################
@@ -64,8 +63,8 @@ def test_get_queue_size():
             for o in [ctx, dev_id]:
                 cl.release(o)
 
-def test_run_vecadd():
-    plat_id = cl.get_platform_ids()[PLAT_IDX]
+def test_run_vecadd(platform_index):
+    plat_id = cl.get_platform_ids()[platform_index]
     dev = cl.get_device_ids(plat_id)[0]
     if not cl.get_info(cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE, dev):
         return
@@ -126,8 +125,8 @@ def test_run_vecadd():
     for obj in objs:
         cl.release(obj)
 
-def test_ooo_queue():
-    ctx = MyContext(PLAT_IDX, 0)
+def test_ooo_queue(platform_index):
+    ctx = MyContext(platform_index, 0)
     if not cl.get_info(cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE, ctx.dev_id):
         return
 
@@ -156,11 +155,11 @@ def test_ooo_queue():
     cl.wait_for_events([ev1, ev2])
     ctx.finish_and_release()
 
-def test_torch_tensors():
+def test_torch_tensors(platform_index):
     orig = torch.randn((64, 3, 3, 3, 25))
     new = torch.empty_like(orig)
 
-    ctx = MyContext(PLAT_IDX, 0)
+    ctx = MyContext(platform_index, 0)
     ctx.create_queue("main", [])
 
     ev1 = write_torch_tensor(ctx, "main", "x", orig)
@@ -173,10 +172,10 @@ def test_torch_tensors():
 ########################################################################
 # Tests: higher level
 ########################################################################
-def test_objs():
+def test_objs(platform_index):
     status_key = cl.EventInfo.CL_EVENT_COMMAND_EXECUTION_STATUS
 
-    ctx = MyContext(PLAT_IDX, 0)
+    ctx = MyContext(platform_index, 0)
     ctx.create_queue("main0", [])
     ctx.create_queue("main1", [])
 
@@ -197,13 +196,13 @@ def test_objs():
     assert np.array_equal(arr1, arr2)
     ctx.finish_and_release()
 
-def test_run_vecadd_obj():
+def test_run_vecadd_obj(platform_index):
     n_els = 16
     A = np.random.uniform(size = (n_els,)).astype(np.float32)
     B = np.random.uniform(size = (n_els,)).astype(np.float32)
     C = np.empty_like(A)
 
-    ctx = MyContext(PLAT_IDX, 0)
+    ctx = MyContext(platform_index, 0)
     if not cl.get_info(cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE, ctx.dev_id):
         return
 
@@ -233,8 +232,8 @@ def test_run_vecadd_obj():
 
     ctx.finish_and_release()
 
-def test_conv2d():
-    ctx = MyContext(PLAT_IDX, 0)
+def test_conv2d(platform_index):
+    ctx = MyContext(platform_index, 0)
     if not cl.get_info(cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE, ctx.dev_id):
         return
 
