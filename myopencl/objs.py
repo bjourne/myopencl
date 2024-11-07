@@ -17,23 +17,6 @@ def name_event(*args):
     EVENT_CNT += 1
     return s
 
-TYPE_STR_TO_CTYPE = {
-    "float" : ctypes.c_float,
-    "uint" : cl.cl_uint
-}
-
-def is_buf_arg(details):
-    key = cl.KernelArgInfo.CL_KERNEL_ARG_ADDRESS_QUALIFIER
-    val = cl.KernelArgAddressQualifier.CL_KERNEL_ARG_ADDRESS_GLOBAL
-    return details[key] == val
-
-def py_to_ctypes(details, py_val):
-    key = cl.KernelArgInfo.CL_KERNEL_ARG_TYPE_NAME
-    s = details[key]
-    ct = TYPE_STR_TO_CTYPE[s]
-    return ct(py_val)
-
-
 class MyContext:
     def __init__(self, plat_idx, dev_idx):
         self.plat_id = cl.get_platform_ids()[plat_idx]
@@ -88,19 +71,15 @@ class MyContext:
             kern = cl.create_kernel(prog, kern_name)
             self.kernels[prog_name][kern_name] = kern
 
-    def set_kernel_args(self, prog_name, kern_name, py_args):
+    def set_kernel_args(self, prog_name, kern_name, ct_args):
         kern = self.kernels[prog_name][kern_name]
-        attr = cl.KernelArgInfo.CL_KERNEL_ARG_TYPE_NAME
-        args_details = cl.get_kernel_args_details(kern)
-        assert len(args_details) == len(py_args)
-        for i, (py_arg, d) in enumerate(zip(py_args, args_details)):
-            c_arg = None
-            if is_buf_arg(d) and type(py_arg) == str:
-                c_arg = self.bufs[py_arg]
-                cl.set_kernel_arg(kern, i, self.bufs[py_arg])
+
+        for i, ct_arg in enumerate(ct_args):
+            if type(ct_arg) == str:
+                cl.set_kernel_arg(kern, i, self.bufs[ct_arg])
             else:
-                c_arg = py_to_ctypes(d, py_arg)
-            cl.set_kernel_arg(kern, i, c_arg)
+                ct, val = ct_arg
+                cl.set_kernel_arg(kern, i, ct(val))
 
     def enqueue_kernel(self, q_name, p_name, k_name,
                        global_work, local_work):

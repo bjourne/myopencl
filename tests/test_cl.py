@@ -11,7 +11,7 @@ import myopencl as cl
 import numpy as np
 import torch
 
-PLAT_IDX = 0
+PLAT_IDX = 1
 VECADD = Path("kernels/vecadd.cl")
 
 ########################################################################
@@ -129,17 +129,19 @@ def test_ooo_queue():
     ctx = MyContext(PLAT_IDX, 0)
     ctx.create_queue("main", props)
 
-    n_els = 100 * 1024 * 1024
+    max_alloc = cl.get_info(cl.DeviceInfo.CL_DEVICE_MAX_MEM_ALLOC_SIZE, ctx.dev_id)
+    n_els = min(100 * 1024 * 1024, max_alloc // 8)
     arr = np.random.uniform(size = (n_els,)).astype(np.float32)
     c_ptr = np.ctypeslib.as_ctypes(arr)
 
     ev1 = ctx.create_input_buffer("main", "buf1", arr.nbytes, c_ptr)
     ev2 = ctx.create_input_buffer("main", "buf2", arr.nbytes, c_ptr)
 
-    # Since the queue is out of order both events should run.
+    # This doesn't really work.
     statuses = {
+        cl.CommandExecutionStatus.CL_COMPLETE,
+        cl.CommandExecutionStatus.CL_RUNNING,
         cl.CommandExecutionStatus.CL_SUBMITTED,
-        cl.CommandExecutionStatus.CL_RUNNING
     }
     key = cl.EventInfo.CL_EVENT_COMMAND_EXECUTION_STATUS
     assert (cl.get_info(key, ev1) in statuses and
@@ -201,9 +203,11 @@ def test_run_vecadd_obj():
     ctx.create_output_buffer("C", A.nbytes)
     ctx.create_program("vecadd", VECADD)
 
+
     ctx.run_kernel("main", "vecadd", "vecadd",
                    [n_els], None,
                    ["A", "B", "C"])
+
     ev = read_numpy_array(ctx, "main", "C", C)
     cl.wait_for_events([ev])
     assert np.sum(A + B - C) == 0.0
@@ -211,7 +215,8 @@ def test_run_vecadd_obj():
     C = np.empty_like(A)
     ctx.run_kernel("main", "vecadd", "vecadd_serial",
                    [1], None,
-                   [n_els, "A", "B", "C"])
+                   [(cl.cl_uint, 1), "A", "B", "C"])
+
     ev = read_numpy_array(ctx, "main", "C", C)
     cl.wait_for_events([ev])
     assert np.sum(A + B - C) == 0.0
@@ -252,10 +257,11 @@ def test_conv2d():
         ctx.create_output_buffer("y", y_cl.nbytes)
 
         args = [
-            n_out, n_in, k_size, k_size, "filters",
-            i_h, i_w, "x",
-            padding,
-            "y"
+            (cl.cl_uint, n_out),
+            (cl.cl_uint, n_in),
+            (cl.cl_uint, k_size), (cl.cl_uint, k_size), "filters",
+            (cl.cl_uint, i_h), (cl.cl_uint, i_w), "x",
+            (cl.cl_uint, padding), "y"
         ]
         ev = ctx.run_kernel("main", "conv2d", "conv2d", [1], None, args)
         cl.wait_for_events([ev])

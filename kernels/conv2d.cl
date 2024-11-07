@@ -48,7 +48,8 @@ set_3d(
     D[idx_3d(d0, d1, d2, i0, i1, i2)] = val;
 }
 
-__kernel void conv2d(
+__kernel void
+conv2d(
     uint n_out, uint n_in, uint f_height, uint f_width,
     __global const float * restrict F,
     uint i_height, uint i_width,
