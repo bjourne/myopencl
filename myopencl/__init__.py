@@ -371,6 +371,7 @@ class ProgramBuildInfo(InfoEnum):
     CL_PROGRAM_BUILD_OPTIONS = 0x1182, c_char_p
     CL_PROGRAM_BUILD_LOG = 0x1183, c_char_p
 
+# Lists stuff you can query which may not be available.
 OPTIONAL_INFO = {
     ErrorCode.CL_INVALID_VALUE : {
         CommandQueueInfo.CL_QUEUE_SIZE : -1
@@ -381,6 +382,13 @@ OPTIONAL_INFO = {
     ErrorCode.CL_INVALID_PROGRAM_EXECUTABLE : {
         ProgramInfo.CL_PROGRAM_NUM_KERNELS : 0,
         ProgramInfo.CL_PROGRAM_KERNEL_NAMES : ""
+    },
+    ErrorCode.CL_KERNEL_ARG_INFO_NOT_AVAILABLE : {
+        KernelArgInfo.CL_KERNEL_ARG_ADDRESS_QUALIFIER : KernelArgAddressQualifier.CL_KERNEL_ARG_ADDRESS_GLOBAL,
+        KernelArgInfo.CL_KERNEL_ARG_ACCESS_QUALIFIER : KernelArgAccessQualifier.CL_KERNEL_ARG_ACCESS_NONE,
+        KernelArgInfo.CL_KERNEL_ARG_TYPE_NAME : None,
+        KernelArgInfo.CL_KERNEL_ARG_TYPE_QUALIFIER : KernelArgTypeQualifier.CL_KERNEL_ARG_TYPE_NONE,
+        KernelArgInfo.CL_KERNEL_ARG_NAME : None
     }
 }
 
