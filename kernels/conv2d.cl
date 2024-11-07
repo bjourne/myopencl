@@ -29,14 +29,14 @@ idx_3d(uint d0, uint d1, uint d2,
 }
 
 static inline float
-get_4d(const float *D,
+get_4d(__global const float * restrict D,
        uint d0, uint d1, uint d2, uint d3,
        uint i0, uint i1, uint i2, uint i3) {
     return D[idx_4d(d0, d1, d2, d3, i0, i1, i2, i3)];
 }
 
 static inline float
-get_3d(const float *D,
+get_3d(__global const float * restrict D,
        uint d0, uint d1, uint d2,
        uint i0, uint i1, uint i2) {
     return D[idx_3d(d0, d1, d2, i0, i1, i2)];
@@ -44,7 +44,7 @@ get_3d(const float *D,
 
 static inline void
 set_3d(
-    float *D,
+    __global float * restrict D,
     uint d0, uint d1, uint d2,
     uint i0, uint i1, uint i2,
     float val) {
