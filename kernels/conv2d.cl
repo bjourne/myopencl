@@ -1,12 +1,15 @@
 // Copyright (C) 2024 Björn A. Lindqvist <bjourne@gmail.com>
+
 static inline void
 assert_impl(
     const __constant char *fun, int line,
     const __constant char *cond_str, bool cond
 ) {
+    #if DEBUG == 1
     if (!cond) {
         printf("%10s, line %3d: %s FAIL!\n", fun, line, cond_str);
     }
+    #endif
 }
 
 #define STRINGIFY(expr) #expr
@@ -79,8 +82,12 @@ conv2d(
                     ASSERT(dy >= 0 && dx >= 0);
 
                     float acc = get_3d(D, n_out, d_height, d_width, co, dy, dx);
-                    for (uint ay = max(iy, 0); ay < min(iy + f_height, i_height); ay++) {
-                        for (uint ax = max(ix, 0); ax < min(ix + f_width, i_width); ax++) {
+                    uint ay_start = max(iy, 0);
+                    uint ay_end = min(iy + f_height, i_height);
+                    uint ax_start = max(ix, 0);
+                    uint ax_end = min(ix + f_width, i_width);
+                    for (uint ay = ay_start; ay < ay_end; ay++) {
+                        for (uint ax = ax_start; ax < ax_end; ax++) {
                             float s = get_3d(S, n_in, i_height, i_width, ci, ay, ax);
                             float w = get_4d(
                                 F, n_out, n_in, f_height, f_width, co, ci,

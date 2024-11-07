@@ -11,7 +11,7 @@ import myopencl as cl
 import numpy as np
 import torch
 
-PLAT_IDX = 1
+PLAT_IDX = 0
 VECADD = Path("kernels/vecadd.cl")
 
 ########################################################################

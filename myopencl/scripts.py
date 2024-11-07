@@ -65,8 +65,9 @@ def build_program(filename, platform_index, include_paths):
 
     prog = cl.create_program_with_source(ctx, source)
     opts = [
-        '-Werror',
-        '-cl-std=CL2.0'
+        "-Werror",
+        "-cl-std=CL2.0",
+        "-cl-kernel-arg-info"
     ] + [f"-I {ip}" for ip in include_paths]
     cl.build_program(prog, dev, " ".join(opts), True, True)
 
