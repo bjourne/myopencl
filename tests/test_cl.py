@@ -11,7 +11,7 @@ import myopencl as cl
 import numpy as np
 import torch
 
-PLAT_IDX = 0
+PLAT_IDX = 1
 VECADD = Path("kernels/vecadd.cl")
 
 ########################################################################
@@ -67,6 +67,8 @@ def test_get_queue_size():
 def test_run_vecadd():
     plat_id = cl.get_platform_ids()[PLAT_IDX]
     dev = cl.get_device_ids(plat_id)[0]
+    if not cl.get_info(cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE, dev):
+        return
 
     ctx = cl.create_context(dev)
     queue = cl.create_command_queue_with_properties(ctx, dev, [])
@@ -92,15 +94,17 @@ def test_run_vecadd():
     cl.set_kernel_arg(kern, 1, mem_b)
     cl.set_kernel_arg(kern, 2, mem_c)
 
-    max_wi_sizes = cl.get_info(
+    # The value is stupid on some platforms.
+    max_wi_size = cl.get_info(
         cl.DeviceInfo.CL_DEVICE_MAX_WORK_ITEM_SIZES, dev
-    )
+    )[0]
+    max_wi_size = min(max_wi_size, 8192)
 
     n_reps = 50
 
     st = time()
     for _ in range(n_reps):
-        ev = cl.enqueue_nd_range_kernel(queue, kern, [n_els], [max_wi_sizes[0]])
+        ev = cl.enqueue_nd_range_kernel(queue, kern, [n_els], [max_wi_size])
         cl.wait_for_events([ev])
     el_per_s = n_reps * n_els / (time() - st)
     el_per_s = metric(el_per_s)
@@ -123,10 +127,13 @@ def test_run_vecadd():
         cl.release(obj)
 
 def test_ooo_queue():
+    ctx = MyContext(PLAT_IDX, 0)
+    if not cl.get_info(cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE, ctx.dev_id):
+        return
+
     prop_key = cl.CommandQueueInfo.CL_QUEUE_PROPERTIES
     prop_val = cl.CommandQueueProperties.CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE
     props = [prop_key, prop_val]
-    ctx = MyContext(PLAT_IDX, 0)
     ctx.create_queue("main", props)
 
     max_alloc = cl.get_info(cl.DeviceInfo.CL_DEVICE_MAX_MEM_ALLOC_SIZE, ctx.dev_id)
@@ -197,6 +204,9 @@ def test_run_vecadd_obj():
     C = np.empty_like(A)
 
     ctx = MyContext(PLAT_IDX, 0)
+    if not cl.get_info(cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE, ctx.dev_id):
+        return
+
     ctx.create_queue("main", [])
     write_numpy_array(ctx, "main", "A", A)
     write_numpy_array(ctx, "main", "B", B)
@@ -224,8 +234,10 @@ def test_run_vecadd_obj():
     ctx.finish_and_release()
 
 def test_conv2d():
-
     ctx = MyContext(PLAT_IDX, 0)
+    if not cl.get_info(cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE, ctx.dev_id):
+        return
+
     path = Path("kernels/conv2d.cl")
     ctx.create_program("conv2d", path)
     ctx.create_queue("main", [])
