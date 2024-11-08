@@ -328,6 +328,7 @@ class ProgramInfo(InfoEnum):
     CL_PROGRAM_DEVICES = 0x1163, POINTER(cl_device_id)
     CL_PROGRAM_SOURCE = 0x1164, c_char_p
     CL_PROGRAM_BINARY_SIZES = 0x1165, POINTER(c_size_t)
+    CL_PROGRAM_BINARIES = 0x1166, c_char_p
     CL_PROGRAM_NUM_KERNELS = 0x1167, c_size_t
     CL_PROGRAM_KERNEL_NAMES = 0x1168, c_char_p
 
@@ -374,20 +375,22 @@ class ProgramBuildInfo(InfoEnum):
 # Lists stuff you can query which may not be available.
 OPTIONAL_INFO = {
     ErrorCode.CL_INVALID_VALUE : {
-        CommandQueueInfo.CL_QUEUE_SIZE : -1
+        CommandQueueInfo.CL_QUEUE_SIZE : 0,
+        ProgramInfo.CL_PROGRAM_BINARIES : None,
+        ProgramInfo.CL_PROGRAM_SOURCE : None
     },
     ErrorCode.CL_INVALID_COMMAND_QUEUE : {
-        CommandQueueInfo.CL_QUEUE_SIZE : -1
+        CommandQueueInfo.CL_QUEUE_SIZE : 0
     },
     ErrorCode.CL_INVALID_PROGRAM_EXECUTABLE : {
         ProgramInfo.CL_PROGRAM_NUM_KERNELS : 0,
         ProgramInfo.CL_PROGRAM_KERNEL_NAMES : ""
     },
     ErrorCode.CL_KERNEL_ARG_INFO_NOT_AVAILABLE : {
-        KernelArgInfo.CL_KERNEL_ARG_ADDRESS_QUALIFIER : KernelArgAddressQualifier.CL_KERNEL_ARG_ADDRESS_GLOBAL,
-        KernelArgInfo.CL_KERNEL_ARG_ACCESS_QUALIFIER : KernelArgAccessQualifier.CL_KERNEL_ARG_ACCESS_NONE,
+        KernelArgInfo.CL_KERNEL_ARG_ADDRESS_QUALIFIER : None,
+        KernelArgInfo.CL_KERNEL_ARG_ACCESS_QUALIFIER : None,
         KernelArgInfo.CL_KERNEL_ARG_TYPE_NAME : None,
-        KernelArgInfo.CL_KERNEL_ARG_TYPE_QUALIFIER : KernelArgTypeQualifier.CL_KERNEL_ARG_TYPE_NONE,
+        KernelArgInfo.CL_KERNEL_ARG_TYPE_QUALIFIER : None,
         KernelArgInfo.CL_KERNEL_ARG_NAME : None
     }
 }
@@ -529,6 +532,17 @@ so.clGetPlatformIDs.argtypes = [
 ]
 
 # Program
+so.clCreateProgramWithBinary.restype = cl_program
+so.clCreateProgramWithBinary.argtypes = [
+    cl_context,
+    cl_uint,
+    POINTER(cl_device_id),
+    POINTER(c_size_t),
+    POINTER(c_char_p),
+    POINTER(cl_int),
+    POINTER(cl_int)
+]
+
 so.clCreateProgramWithSource.restype = cl_program
 so.clCreateProgramWithSource.argtypes = [
     cl_context,
@@ -805,10 +819,20 @@ def create_program_with_source(ctx, src):
     lengths = (c_size_t * 1)(len(src))
     return check_last(so.clCreateProgramWithSource, ctx, 1, strings, lengths)
 
+def create_program_with_binary(ctx, dev, binary):
+    lengths = (c_size_t * 1)(len(binary))
+    binaries = (c_char_p *1)(binary)
+    err = cl_int()
+    return check_last(
+        so.clCreateProgramWithBinary, ctx,
+        1, byref(dev),
+        lengths, binaries,
+        None
+    )
 
 def build_program(prog, dev, opts, throw, print_log):
     opts = create_string_buffer(opts.encode("utf-8"))
-    err = so.clBuildProgram(prog, 1, pointer(dev), opts, None, None)
+    err = so.clBuildProgram(prog, 1, byref(dev), opts, None, None)
     if err != 0 and print_log:
         attr = ProgramBuildInfo.CL_PROGRAM_BUILD_LOG
         log = get_info(attr, prog, dev)

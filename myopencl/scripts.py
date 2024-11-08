@@ -35,7 +35,10 @@ def list_platforms():
 
 
 @cli.command()
-@click.argument("filename", type = click.Path(exists = True))
+@click.argument(
+    "filename",
+    type = click.Path(exists = True)
+)
 @click.option(
     "-pi", "--platform-index", default = 0,
     help = "Index of platform to use."
@@ -48,10 +51,10 @@ def list_platforms():
     default = ()
 )
 def build_program(filename, platform_index, include_paths):
-    """Build an OpenCL program and list its details."""
+    """Build an OpenCL program and list its details. If the extension
+    of FILENAME Is not .cl it is assumed to be a binary.
+    """
     path = Path(filename)
-
-    source = path.read_text("utf-8")
 
     plat_id = cl.get_platform_ids()[platform_index]
     dev = cl.get_device_ids(plat_id)[0]
@@ -63,7 +66,12 @@ def build_program(filename, platform_index, include_paths):
     print(f"Device        : {dev_name}")
     print(f"Driver        : {dev_driver}")
 
-    prog = cl.create_program_with_source(ctx, source)
+
+    data = path.read_bytes()
+    if path.suffix == ".cl":
+        prog = cl.create_program_with_source(ctx, data.decode("utf-8"))
+    else:
+        prog = cl.create_program_with_binary(ctx, dev, data)
     opts = [
         "-Werror",
         "-cl-std=CL2.0",

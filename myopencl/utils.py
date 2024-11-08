@@ -18,9 +18,15 @@ BYTE_INFOS = {
     cl.DeviceInfo.CL_DEVICE_GLOBAL_MEM_CACHE_SIZE,
 }
 
+BYTE_INFO_LISTS = {
+    cl.ProgramInfo.CL_PROGRAM_BINARY_SIZES
+}
+
 def pp_enum_val(wrapper, key, val):
     if key in BYTE_INFOS:
         val = naturalsize(val)
+    if key in BYTE_INFO_LISTS:
+        val = ', '.join(naturalsize(v) for v in val)
     if isinstance(val, Enum):
         val = val.name
     if isinstance(val, str) and "\n" in val:
