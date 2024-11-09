@@ -60,10 +60,13 @@ class MyContext:
         return ev
 
     # Less basic stuff
-    def create_program(self, prog_name, path):
-        source = path.read_text("utf-8")
-        prog = cl.create_program_with_source(self.ctx, source)
-        opts = "-Werror -cl-std=CL2.0 -cl-unsafe-math-optimizations"
+    def create_program(self, prog_name, path, opts):
+        data = path.read_bytes()
+        if path.suffix == ".cl":
+            prog = cl.create_program_with_source(self.ctx, data.decode("utf-8"))
+        else:
+            prog = cl.create_program_with_binary(self.ctx, self.dev_id, data)
+
         cl.build_program(prog, self.dev_id, opts, True, True)
         self.programs[prog_name] = prog
 

@@ -3,7 +3,6 @@ from humanize import metric
 from myopencl.objs import MyContext
 from pathlib import Path
 from time import time
-from torch.nn import Conv2d
 from torch.nn.functional import conv2d
 
 import ctypes
@@ -12,6 +11,7 @@ import numpy as np
 import torch
 
 VECADD = Path("kernels/vecadd.cl")
+BUILD_OPTS = "-cl-std=CL2.0 -cl-unsafe-math-optimizations"
 
 ########################################################################
 # Utils
@@ -59,7 +59,7 @@ def test_get_queue_size():
         for dev_id in cl.get_device_ids(plat_id):
             ctx = cl.create_context(dev_id)
             q = cl.create_command_queue_with_properties(ctx, dev_id, [])
-            assert cl.get_info(attr, q) == -1
+            assert cl.get_info(attr, q) == 0
             for o in [ctx, dev_id]:
                 cl.release(o)
 
@@ -210,7 +210,7 @@ def test_run_vecadd_obj(platform_index):
     write_numpy_array(ctx, "main", "A", A)
     write_numpy_array(ctx, "main", "B", B)
     ctx.create_output_buffer("C", A.nbytes)
-    ctx.create_program("vecadd", VECADD)
+    ctx.create_program("vecadd", VECADD, BUILD_OPTS)
 
 
     ctx.run_kernel("main", "vecadd", "vecadd",
@@ -238,7 +238,7 @@ def test_conv2d(platform_index):
         return
 
     path = Path("kernels/conv2d.cl")
-    ctx.create_program("conv2d", path)
+    ctx.create_program("conv2d", path, BUILD_OPTS)
     ctx.create_queue("main", [])
 
     scenarios = [
