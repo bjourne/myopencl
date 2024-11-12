@@ -2,6 +2,7 @@
 from enum import Enum
 from humanize import naturalsize
 from os import get_terminal_size
+from sys import stdout
 from textwrap import TextWrapper
 
 import myopencl as cl
@@ -49,5 +50,5 @@ def pp_dict(wrapper, d):
     print()
 
 def terminal_wrapper():
-    cols, _ = get_terminal_size()
+    cols = get_terminal_size()[0] if stdout.isatty() else 72
     return TextWrapper(width=cols - 4, subsequent_indent=INDENT_STR)

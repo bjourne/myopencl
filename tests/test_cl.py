@@ -1,7 +1,16 @@
 # Copyright (C) 2024 Björn A. Lindqvist
+
+# Names:
+#   * bname - buffer name
+#   * c - MyContext
+#   * cptr - C pointer
+#   * ev - event
+#   * qname - queue name
+
 from humanize import metric
 from myopencl.objs import MyContext
 from pathlib import Path
+from pytest import mark
 from time import time
 from torch.nn.functional import conv2d
 
@@ -12,16 +21,21 @@ import torch
 
 VECADD = Path("kernels/vecadd.cl")
 BUILD_OPTS = "-cl-std=CL2.0 -cl-unsafe-math-optimizations"
+PLATFORM_IDS = cl.get_platform_ids()
+
+PAIRS = []
+for p in cl.get_platform_ids():
+    PAIRS.extend([(p, d) for d in cl.get_device_ids(p)])
 
 ########################################################################
 # Utils
 ########################################################################
-def write_torch_tensor(ctx, q_name, buf_name, x):
+def write_torch_tensor(ctx, qname, bname, x):
     assert x.is_contiguous()
     assert x.is_cpu
 
-    c_ptr = ctypes.cast(x.data_ptr(), ctypes.c_void_p)
-    return ctx.create_input_buffer(q_name, buf_name, x.nbytes, c_ptr)
+    cptr = ctypes.cast(x.data_ptr(), ctypes.c_void_p)
+    return ctx.register_input_buffer(qname, bname, x.nbytes, cptr)
 
 def read_torch_tensor(ctx, q_name, buf_name, x):
     assert x.is_contiguous()
@@ -30,13 +44,16 @@ def read_torch_tensor(ctx, q_name, buf_name, x):
     c_ptr = ctypes.cast(x.data_ptr(), ctypes.c_void_p)
     return ctx.read_buffer(q_name, buf_name, x.nbytes, c_ptr)
 
-def write_numpy_array(ctx, q_name, buf_name, x):
-    c_ptr = np.ctypeslib.as_ctypes(x)
-    return ctx.create_input_buffer(q_name, buf_name, x.nbytes, c_ptr)
+def write_numpy_array(c, qname, bname, x):
+    cptr = np.ctypeslib.as_ctypes(x)
+    return c.register_input_buffer(qname, bname, x.nbytes, cptr)
 
-def read_numpy_array(ctx, q_name, buf_name, x):
-    c_ptr = np.ctypeslib.as_ctypes(x)
-    return ctx.read_buffer(q_name, buf_name, x.nbytes, c_ptr)
+def read_numpy_array(c, qname, bname, x):
+    cptr = np.ctypeslib.as_ctypes(x)
+    return c.read_buffer(qname, bname, x.nbytes, cptr)
+
+def can_compile(device_id):
+    return cl.get_info(cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE, device_id)
 
 ########################################################################
 # Tests: low-level
@@ -48,24 +65,25 @@ def test_release_none():
     except KeyError:
         assert True
 
-def test_release_device():
-    plat_id = cl.get_platform_ids()[0]
-    dev_id = cl.get_device_ids(plat_id)[0]
+@mark.parametrize("platform_id", PLATFORM_IDS)
+def test_release_device(platform_id):
+    dev_id = cl.get_device_ids(platform_id)[0]
     cl.release(dev_id)
 
-def test_get_queue_size():
+@mark.parametrize("platform_id", PLATFORM_IDS)
+def test_get_queue_size(platform_id):
     attr = cl.CommandQueueInfo.CL_QUEUE_SIZE
-    for plat_id in cl.get_platform_ids():
-        for dev_id in cl.get_device_ids(plat_id):
-            ctx = cl.create_context(dev_id)
-            q = cl.create_command_queue_with_properties(ctx, dev_id, [])
-            assert cl.get_info(attr, q) == 0
-            for o in [ctx, dev_id]:
-                cl.release(o)
 
-def test_run_vecadd(platform_index):
-    plat_id = cl.get_platform_ids()[platform_index]
-    dev = cl.get_device_ids(plat_id)[0]
+    for dev_id in cl.get_device_ids(platform_id):
+        ctx = cl.create_context(dev_id)
+        q = cl.create_command_queue_with_properties(ctx, dev_id, [])
+        assert cl.get_info(attr, q) == 0
+        for o in [ctx, dev_id]:
+            cl.release(o)
+
+@mark.parametrize("platform_id", PLATFORM_IDS)
+def test_vecadd(platform_id):
+    dev = cl.get_device_ids(platform_id)[0]
     if not cl.get_info(cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE, dev):
         return
 
@@ -125,23 +143,23 @@ def test_run_vecadd(platform_index):
     for obj in objs:
         cl.release(obj)
 
-def test_ooo_queue(platform_index):
-    ctx = MyContext(platform_index, 0)
-    if not cl.get_info(cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE, ctx.dev_id):
-        return
+@mark.parametrize("platform_id,device_id", PAIRS)
+def test_ooo_queue(platform_id, device_id):
+    ctx = MyContext(platform_id, device_id)
 
     prop_key = cl.CommandQueueInfo.CL_QUEUE_PROPERTIES
     prop_val = cl.CommandQueueProperties.CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE
     props = [prop_key, prop_val]
-    ctx.create_queue("main", props)
+    ctx.register_queue("main", props)
 
-    max_alloc = cl.get_info(cl.DeviceInfo.CL_DEVICE_MAX_MEM_ALLOC_SIZE, ctx.dev_id)
+    attr = cl.DeviceInfo.CL_DEVICE_MAX_MEM_ALLOC_SIZE
+    max_alloc = cl.get_info(attr, ctx.device_id)
     n_els = min(100 * 1024 * 1024, max_alloc // 8)
     arr = np.random.uniform(size = (n_els,)).astype(np.float32)
-    c_ptr = np.ctypeslib.as_ctypes(arr)
+    cptr = np.ctypeslib.as_ctypes(arr)
 
-    ev1 = ctx.create_input_buffer("main", "buf1", arr.nbytes, c_ptr)
-    ev2 = ctx.create_input_buffer("main", "buf2", arr.nbytes, c_ptr)
+    ev1 = ctx.register_input_buffer("main", "buf1", arr.nbytes, cptr)
+    ev2 = ctx.register_input_buffer("main", "buf2", arr.nbytes, cptr)
 
     # This doesn't really work.
     statuses = {
@@ -152,15 +170,17 @@ def test_ooo_queue(platform_index):
     key = cl.EventInfo.CL_EVENT_COMMAND_EXECUTION_STATUS
     assert (cl.get_info(key, ev1) in statuses and
             cl.get_info(key, ev2) in statuses)
+
     cl.wait_for_events([ev1, ev2])
     ctx.finish_and_release()
 
-def test_torch_tensors(platform_index):
+@mark.parametrize("platform_id,device_id", PAIRS)
+def test_torch_tensors(platform_id, device_id):
     orig = torch.randn((64, 3, 3, 3, 25))
     new = torch.empty_like(orig)
 
-    ctx = MyContext(platform_index, 0)
-    ctx.create_queue("main", [])
+    ctx = MyContext(platform_id, device_id)
+    ctx.register_queue("main", [])
 
     ev1 = write_torch_tensor(ctx, "main", "x", orig)
     ev2 = read_torch_tensor(ctx, "main", "x", new)
@@ -172,74 +192,85 @@ def test_torch_tensors(platform_index):
 ########################################################################
 # Tests: higher level
 ########################################################################
-def test_objs(platform_index):
+@mark.parametrize("platform_id,device_id", PAIRS)
+def test_objs(platform_id, device_id):
     status_key = cl.EventInfo.CL_EVENT_COMMAND_EXECUTION_STATUS
 
-    ctx = MyContext(platform_index, 0)
-    ctx.create_queue("main0", [])
-    ctx.create_queue("main1", [])
+    c = MyContext(platform_id, device_id)
+    c.register_queue("main0", [])
+    c.register_queue("main1", [])
 
     n_els = 10 * 1024 * 1024
     arr1 = np.random.uniform(size = (n_els,)).astype(np.float32)
     arr2 = np.zeros(n_els, dtype = np.float32)
-    c_ptr1 = np.ctypeslib.as_ctypes(arr1)
-    c_ptr2 = np.ctypeslib.as_ctypes(arr2)
+    cptr1 = np.ctypeslib.as_ctypes(arr1)
+    cptr2 = np.ctypeslib.as_ctypes(arr2)
 
-    ev1 = ctx.create_input_buffer("main0", "buf", arr1.nbytes, c_ptr1)
+    ev1 = c.register_input_buffer("main0", "buf", arr1.nbytes, cptr1)
     cl.wait_for_events([ev1])
-    ev2 = ctx.read_buffer("main1", "buf", arr1.nbytes, c_ptr2)
+    ev2 = c.read_buffer("main1", "buf", arr1.nbytes, cptr2)
     cl.wait_for_events([ev2])
 
     for ev in [ev1, ev2]:
         val = cl.CommandExecutionStatus.CL_COMPLETE
         assert cl.get_info(status_key, ev) == val
     assert np.array_equal(arr1, arr2)
-    ctx.finish_and_release()
+    c.finish_and_release()
 
-def test_run_vecadd_obj(platform_index):
+@mark.parametrize("platform_id,device_id", PAIRS)
+def test_vecadd_objs(platform_id, device_id):
     n_els = 16
     A = np.random.uniform(size = (n_els,)).astype(np.float32)
     B = np.random.uniform(size = (n_els,)).astype(np.float32)
     C = np.empty_like(A)
 
-    ctx = MyContext(platform_index, 0)
-    if not cl.get_info(cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE, ctx.dev_id):
+    c = MyContext(platform_id, device_id)
+    if not can_compile(c.device_id):
+        c.finish_and_release()
         return
 
-    ctx.create_queue("main", [])
-    write_numpy_array(ctx, "main", "A", A)
-    write_numpy_array(ctx, "main", "B", B)
-    ctx.create_output_buffer("C", A.nbytes)
-    ctx.create_program("vecadd", VECADD, BUILD_OPTS)
+    c.register_queue("main", [])
+    write_numpy_array(c, "main", "A", A)
+    write_numpy_array(c, "main", "B", B)
+    c.register_output_buffer("C", A.nbytes)
+    c.register_program("vecadd", VECADD, BUILD_OPTS)
 
 
-    ctx.run_kernel("main", "vecadd", "vecadd",
-                   [n_els], None,
-                   ["A", "B", "C"])
+    c.run_kernel("main", "vecadd", "vecadd",
+                 [n_els], None,
+                 ["A", "B", "C"])
 
-    ev = read_numpy_array(ctx, "main", "C", C)
+    ev = read_numpy_array(c, "main", "C", C)
     cl.wait_for_events([ev])
     assert np.sum(A + B - C) == 0.0
 
     C = np.empty_like(A)
-    ctx.run_kernel("main", "vecadd", "vecadd_serial",
-                   [1], None,
-                   [(cl.cl_uint, 1), "A", "B", "C"])
+    c.run_kernel("main", "vecadd", "vecadd_serial",
+                 [1], None,
+                 [(cl.cl_uint, 1), "A", "B", "C"])
 
-    ev = read_numpy_array(ctx, "main", "C", C)
+    ev = read_numpy_array(c, "main", "C", C)
     cl.wait_for_events([ev])
     assert np.sum(A + B - C) == 0.0
 
-    ctx.finish_and_release()
+    c.finish_and_release()
 
-def test_conv2d(platform_index):
-    ctx = MyContext(platform_index, 0)
-    if not cl.get_info(cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE, ctx.dev_id):
+@mark.parametrize("platform_id,device_id", PAIRS)
+def test_print_objs(platform_id, device_id):
+    c = MyContext(platform_id, device_id)
+    c.print()
+    c.finish_and_release()
+
+@mark.parametrize("platform_id,device_id", PAIRS)
+def test_conv2d(platform_id, device_id):
+    c = MyContext(platform_id, device_id)
+    if not can_compile(c.device_id):
+        c.finish_and_release()
         return
 
     path = Path("kernels/conv2d.cl")
-    ctx.create_program("conv2d", path, BUILD_OPTS)
-    ctx.create_queue("main", [])
+    c.register_program("conv2d", path, BUILD_OPTS)
+    c.register_queue("main", [])
 
     scenarios = [
         dict(n_in = 3, n_out = 64, k_size = 3, i_h = 32, i_w = 32, padding = 1),
@@ -263,9 +294,9 @@ def test_conv2d(platform_index):
 
         # Run on OpenCL
         y_cl = torch.empty_like(y_torch)
-        write_torch_tensor(ctx, "main", "filters", filters)
-        write_torch_tensor(ctx, "main", "x", x)
-        ctx.create_output_buffer("y", y_cl.nbytes)
+        write_torch_tensor(c, "main", "filters", filters)
+        write_torch_tensor(c, "main", "x", x)
+        c.register_output_buffer("y", y_cl.nbytes)
 
         args = [
             (cl.cl_uint, n_out),
@@ -274,9 +305,9 @@ def test_conv2d(platform_index):
             (cl.cl_uint, i_h), (cl.cl_uint, i_w), "x",
             (cl.cl_uint, padding), "y"
         ]
-        ev = ctx.run_kernel("main", "conv2d", "conv2d", [1], None, args)
+        ev = c.run_kernel("main", "conv2d", "conv2d", [1], None, args)
         cl.wait_for_events([ev])
-        ev = read_torch_tensor(ctx, "main", "y", y_cl)
+        ev = read_torch_tensor(c, "main", "y", y_cl)
         cl.wait_for_events([ev])
 
         diff = torch.abs(torch.sum(y_cl - y_torch))
@@ -286,5 +317,5 @@ def test_conv2d(platform_index):
             print("== EXPECTED ==")
             print(y_torch)
         assert diff < 0.01
-        ctx.release_all_buffers()
-    ctx.finish_and_release()
+        c.release_all_buffers()
+    c.finish_and_release()

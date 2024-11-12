@@ -73,7 +73,6 @@ def build_program(filename, platform_index, include_paths):
     else:
         prog = cl.create_program_with_binary(ctx, dev, data)
     opts = [
-        "-Werror",
         "-cl-std=CL2.0",
         "-cl-kernel-arg-info"
     ] + [f"-I {ip}" for ip in include_paths]
