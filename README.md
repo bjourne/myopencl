@@ -7,6 +7,8 @@ need. If you want a fully-featured binding use [PyOpenCL](https://documen.tician
 
 ## Installation
 
+    git clone https://github.com/bjourne/myopencl
+    cd myopencl
     pip install -U . --break-system-packages
 
 You can use the mcl-tool for diagnostics:
@@ -17,4 +19,4 @@ You can use the mcl-tool for diagnostics:
 
 ## Unit tests
 
-    $ PYTHONPATH=. pytest -vs
+    $ PYTHONPATH=. pytest -vs tests

@@ -1,11 +1,13 @@
 # Copyright (C) 2024 Björn A. Lindqvist
-
+#
 # Names:
 #   * bname - buffer name
 #   * c - MyContext
 #   * cptr - C pointer
 #   * ev - event
+#   * nbytes - number of bytes
 #   * qname - queue name
+#   * x - tensor or numpy array
 
 from humanize import metric
 from myopencl.objs import MyContext
@@ -21,7 +23,6 @@ import torch
 
 VECADD = Path("kernels/vecadd.cl")
 BUILD_OPTS = "-cl-std=CL2.0 -cl-unsafe-math-optimizations"
-PLATFORM_IDS = cl.get_platform_ids()
 
 PAIRS = []
 for p in cl.get_platform_ids():
@@ -65,55 +66,51 @@ def test_release_none():
     except KeyError:
         assert True
 
-@mark.parametrize("platform_id", PLATFORM_IDS)
-def test_release_device(platform_id):
+@mark.parametrize("platform_id, device_id", PAIRS)
+def test_release_device(platform_id, device_id):
     dev_id = cl.get_device_ids(platform_id)[0]
     cl.release(dev_id)
 
-@mark.parametrize("platform_id", PLATFORM_IDS)
-def test_get_queue_size(platform_id):
+@mark.parametrize("platform_id, device_id", PAIRS)
+def test_get_queue_size(platform_id, device_id):
+    ctx = cl.create_context(device_id)
+    q = cl.create_command_queue_with_properties(ctx, device_id, [])
     attr = cl.CommandQueueInfo.CL_QUEUE_SIZE
+    assert cl.get_info(attr, q) == 0
+    cl.release(ctx)
+    cl.release(device_id)
 
-    for dev_id in cl.get_device_ids(platform_id):
-        ctx = cl.create_context(dev_id)
-        q = cl.create_command_queue_with_properties(ctx, dev_id, [])
-        assert cl.get_info(attr, q) == 0
-        for o in [ctx, dev_id]:
-            cl.release(o)
-
-@mark.parametrize("platform_id", PLATFORM_IDS)
-def test_vecadd(platform_id):
-    dev = cl.get_device_ids(platform_id)[0]
-    if not cl.get_info(cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE, dev):
+@mark.parametrize("platform_id, device_id", PAIRS)
+def test_vecadd(platform_id, device_id):
+    if not can_compile(device_id):
         return
 
-    ctx = cl.create_context(dev)
-    queue = cl.create_command_queue_with_properties(ctx, dev, [])
+    ctx = cl.create_context(device_id)
+    queue = cl.create_command_queue_with_properties(ctx, device_id, [])
 
     el_tp = ctypes.c_float
     n_els = 10 * 1000 * 1024
     el_size = ctypes.sizeof(el_tp)
-    n_bytes = n_els * el_size
-    mem_a = cl.create_buffer(ctx, cl.MemFlags.CL_MEM_READ_ONLY, n_bytes)
-    mem_b = cl.create_buffer(ctx, cl.MemFlags.CL_MEM_READ_ONLY, n_bytes)
-    mem_c = cl.create_buffer(ctx, cl.MemFlags.CL_MEM_WRITE_ONLY, n_bytes)
+    nbytes = n_els * el_size
+    mem_a = cl.create_buffer(ctx, cl.MemFlags.CL_MEM_READ_ONLY, nbytes)
+    mem_b = cl.create_buffer(ctx, cl.MemFlags.CL_MEM_READ_ONLY, nbytes)
+    mem_c = cl.create_buffer(ctx, cl.MemFlags.CL_MEM_WRITE_ONLY, nbytes)
 
-    ev1 = cl.enqueue_fill_buffer(queue, mem_a, el_tp(1.5), 0, n_bytes)
-    ev2 = cl.enqueue_fill_buffer(queue, mem_b, el_tp(2.5), 0, n_bytes)
+    ev1 = cl.enqueue_fill_buffer(queue, mem_a, el_tp(1.5), 0, nbytes)
+    ev2 = cl.enqueue_fill_buffer(queue, mem_b, el_tp(2.5), 0, nbytes)
     cl.wait_for_events([ev1, ev2])
 
     source = VECADD.read_text("utf-8")
     prog = cl.create_program_with_source(ctx, source)
-    cl.build_program(prog, dev, "-Werror -cl-std=CL2.0", True, True)
+    cl.build_program(prog, device_id, "-Werror -cl-std=CL2.0", True, True)
     kern = cl.create_kernel(prog, "vecadd")
 
-    cl.set_kernel_arg(kern, 0, mem_a)
-    cl.set_kernel_arg(kern, 1, mem_b)
-    cl.set_kernel_arg(kern, 2, mem_c)
+    for i, buf in enumerate([mem_a, mem_b, mem_c]):
+        cl.set_kernel_arg(kern, i, buf)
 
     # The value is stupid on some platforms.
     max_wi_size = cl.get_info(
-        cl.DeviceInfo.CL_DEVICE_MAX_WORK_ITEM_SIZES, dev
+        cl.DeviceInfo.CL_DEVICE_MAX_WORK_ITEM_SIZES, device_id
     )[0]
     max_wi_size = min(max_wi_size, 8192)
 
@@ -129,7 +126,7 @@ def test_vecadd(platform_id):
 
     c = np.zeros(n_els, dtype = np.float32)
     ptr = np.ctypeslib.as_ctypes(c)
-    ev = cl.enqueue_read_buffer(queue, mem_c, False, 0, n_bytes, ptr)
+    ev = cl.enqueue_read_buffer(queue, mem_c, False, 0, nbytes, ptr)
     cl.wait_for_events([ev])
     assert np.sum(c) == n_els * 4
 
@@ -138,12 +135,12 @@ def test_vecadd(platform_id):
     objs = [
         mem_a, mem_b, mem_c,
         prog, kern,
-        queue, ctx, dev
+        queue, ctx, device_id
     ]
     for obj in objs:
         cl.release(obj)
 
-@mark.parametrize("platform_id,device_id", PAIRS)
+@mark.parametrize("platform_id, device_id", PAIRS)
 def test_ooo_queue(platform_id, device_id):
     ctx = MyContext(platform_id, device_id)
 
