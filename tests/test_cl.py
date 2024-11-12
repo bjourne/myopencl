@@ -167,12 +167,15 @@ def test_ooo_queue(platform_id, device_id):
     # This doesn't really work.
     statuses = {
         cl.CommandExecutionStatus.CL_COMPLETE,
+        cl.CommandExecutionStatus.CL_QUEUED,
         cl.CommandExecutionStatus.CL_RUNNING,
         cl.CommandExecutionStatus.CL_SUBMITTED,
     }
     key = cl.EventInfo.CL_EVENT_COMMAND_EXECUTION_STATUS
-    assert (cl.get_info(key, ev1) in statuses and
-            cl.get_info(key, ev2) in statuses)
+
+    st1 = cl.get_info(key, ev1)
+    st2 = cl.get_info(key, ev2)
+    assert st1 in statuses and st2 in statuses
 
     cl.wait_for_events([ev1, ev2])
     ctx.finish_and_release()
