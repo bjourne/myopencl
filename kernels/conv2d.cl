@@ -19,85 +19,60 @@ assert_impl(
 
 static inline uint
 idx4d(uint d0, uint d1, uint d2, uint d3,
-       uint i0, uint i1, uint i2, uint i3) {
+      uint i0, uint i1, uint i2, uint i3) {
+    ASSERT(i0 < d0 && i1 < d1 && i2 < d2 && i3 < d3);
     return d1 * d2 * d3 * i0 + d2 * d3 * i1 + d3 * i2 + i3;
 }
 
 static inline uint
 idx3d(uint d0, uint d1, uint d2,
-       uint i0, uint i1, uint i2) {
+      uint i0, uint i1, uint i2) {
     ASSERT(i0 < d0 && i1 < d1 && i2 < d2);
     return d1 * d2 * i0 + d2 * i1 + i2;
 }
 
-static inline float
-get_4d(__global const float * restrict D,
-       uint d0, uint d1, uint d2, uint d3,
-       uint i0, uint i1, uint i2, uint i3) {
-    return D[idx4d(d0, d1, d2, d3, i0, i1, i2, i3)];
-}
-
-static inline float
-get3d(__global const float * restrict D,
-       uint d0, uint d1, uint d2,
-       uint i0, uint i1, uint i2) {
-    return D[idx3d(d0, d1, d2, i0, i1, i2)];
-}
-
-static inline void
-set3d(
-    __global float * restrict D,
-    uint d0, uint d1, uint d2,
-    uint i0, uint i1, uint i2,
-    float val) {
-    D[idx3d(d0, d1, d2, i0, i1, i2)] = val;
-}
-
-// [id][cyx] : i[cyx]_dim)
-
+// S, D, F = Source, Destination, Filter
 __attribute__((uses_global_work_offset(0)))
 __attribute__((max_global_work_dim(0)))
 __kernel void
 conv2d(
-    uint dc_dim, uint ic_dim,
+    uint dc_dim, uint sc_dim,
     uint fy_dim, uint fx_dim,
     __global const float * restrict F,
-    uint iy_dim, uint ix_dim,
+    uint sy_dim, uint sx_dim,
     __global const float * restrict S,
     uint padding,
     __global float * restrict D
 ) {
     // Destination image height and width
-    uint dy_dim = iy_dim + 2 * padding - fy_dim + 1;
-    uint dx_dim = ix_dim + 2 * padding - fx_dim + 1;
+    uint dy_dim = sy_dim + 2 * padding - fy_dim + 1;
+    uint dx_dim = sx_dim + 2 * padding - fx_dim + 1;
 
-    uint d_n = dc_dim * dy_dim * dx_dim;
-    uint i_n = ic_dim * iy_dim * ix_dim;
+    uint dn = dc_dim * dy_dim * dx_dim;
+    uint sn = sc_dim * sy_dim * sx_dim;
 
-    ASSERT(i_n <= 65536);
-    ASSERT(d_n <= 65536);
+    ASSERT(sn <= 65536);
+    ASSERT(dn <= 65536);
 
     // Local image buffers
     __private float LS[65536];
-    for (uint i = 0; i < i_n; i++) {
+    for (uint i = 0; i < sn; i++) {
         LS[i] = S[i];
     }
     __private float LD[65536] = {0.0};
 
     for (uint dc = 0; dc < dc_dim; dc++) {
-
         // Read filter into local memory
         __private float LF[512][3][3];
-        for (uint ci = 0; ci < ic_dim; ci++) {
+        for (uint sc = 0; sc < sc_dim; sc++) {
             for (uint fy = 0; fy < fy_dim; fy++) {
                 for (uint fx = 0; fx < fx_dim; fx++) {
-                    LF[ci][fy][fx] = F[idx4d(dc_dim, ic_dim, fy_dim, fx_dim,
-                                             dc, ci, fy, fx)];
+                    LF[sc][fy][fx] = F[idx4d(dc_dim, sc_dim, fy_dim, fx_dim,
+                                             dc, sc, fy, fx)];
                 }
             }
         }
-
-        for (uint ic = 0; ic < ic_dim; ic++) {
+        for (uint sc = 0; sc < sc_dim; sc++) {
             for (uint dy = 0; dy < dy_dim; dy++) {
                 for (uint dx = 0; dx < dx_dim; dx++) {
                     uint daddr = idx3d(dc_dim, dy_dim, dx_dim, dc, dy, dx);
@@ -106,13 +81,13 @@ conv2d(
                         for (uint fx = 0; fx < fx_dim; fx++) {
                             int ay = dy + fy - padding;
                             int ax = dx + fx - padding;
-                            float s = 0;
-                            if (ay >= 0 && ay < iy_dim && ax >= 0 && ax < ix_dim) {
-                                uint addr = idx3d(ic_dim, iy_dim, ix_dim, ic, ay, ax);
-                                s = S[addr];
+                            float v = 0;
+                            if (ay >= 0 && ay < sy_dim && ax >= 0 && ax < sx_dim) {
+                                uint addr = idx3d(sc_dim, sy_dim, sx_dim, sc, ay, ax);
+                                v = S[addr];
                             }
-                            float w = LF[ic][fy][fx];
-                            acc += s * w;
+                            float w = LF[sc][fy][fx];
+                            acc += v * w;
                         }
                     }
                     LD[daddr] = acc;
@@ -120,7 +95,7 @@ conv2d(
             }
         }
     }
-    for (uint i = 0; i < d_n; i++) {
+    for (uint i = 0; i < dn; i++) {
         D[i] = LD[i];
     }
 }
