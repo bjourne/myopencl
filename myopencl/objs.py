@@ -29,9 +29,9 @@ def name_event(*args):
 
 class MyContext:
     @classmethod
-    def from_indexes(cls, plat_idx, dev_id):
-        platform_id = cl.get_platform_ids()[plat_idx]
-        device_id = cl.get_device_ids(platform_id)[dev_idx]
+    def from_indexes(cls, platform_idx, device_idx):
+        platform_id = cl.get_platform_ids()[platform_idx]
+        device_id = cl.get_device_ids(platform_id)[device_idx]
         return MyContext(platform_id, device_id)
 
     def __init__(self, platform_id, device_id):

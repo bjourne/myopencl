@@ -272,10 +272,6 @@ Conv2DSetup = namedtuple(
 
 @mark.parametrize("platform_id,device_id", PAIRS)
 def test_conv2d(platform_id, device_id):
-
-    # platform_id = cl.get_platform_ids()[0]
-    # device_id = cl.get_device_ids(platform_id)[0]
-
     c = MyContext(platform_id, device_id)
     if not can_compile(c.device_id) or is_gpu(c.device_id):
         c.finish_and_release()
@@ -327,3 +323,9 @@ def test_conv2d(platform_id, device_id):
         assert diff < d.tol
         c.release_all_buffers()
     c.finish_and_release()
+
+def test_from_indexes():
+    for i, platform_id in enumerate(cl.get_platform_ids()):
+        for j, _ in enumerate(cl.get_device_ids(platform_id)):
+            c = MyContext.from_indexes(i, j)
+            c.finish_and_release()
