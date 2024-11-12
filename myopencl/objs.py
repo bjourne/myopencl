@@ -67,21 +67,21 @@ class MyContext:
         return ev
 
     def register_program(self, pname, path, opts):
+        dev_id = self.device_id
+        ctx = self.context
         data = path.read_bytes()
         if path.suffix == ".cl":
             source = data.decode("utf-8")
-            prog = cl.create_program_with_source(self.context, source)
+            prog = cl.create_program_with_source(ctx, source)
         else:
-            prog = cl.create_program_with_binary(
-                self.context, self.device_id, data
-            )
+            prog = cl.create_program_with_binary(ctx, dev_id, data)
 
-        cl.build_program(prog, self.device_id, opts, True, True)
+        cl.build_program(prog, dev_id, opts, True, True)
         self.programs[pname] = prog
 
-        for kname in cl.get_kernel_names(prog):
-            kern = cl.create_kernel(prog, kname)
-            self.kernels[pname][kname] = kern
+        kernels = {n : cl.create_kernel(prog, n)
+                   for n in cl.get_kernel_names(prog)}
+        self.kernels[pname] = kernels
 
 
     # IO

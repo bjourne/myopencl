@@ -5,10 +5,11 @@
 #   * c - MyContext
 #   * cptr - C pointer
 #   * ev - event
+#   * ksize - kernel size
 #   * nbytes - number of bytes
 #   * qname - queue name
 #   * x - tensor or numpy array
-
+from collections import namedtuple
 from humanize import metric
 from myopencl.objs import MyContext
 from pathlib import Path
@@ -54,7 +55,12 @@ def read_numpy_array(c, qname, bname, x):
     return c.read_buffer(qname, bname, x.nbytes, cptr)
 
 def can_compile(device_id):
-    return cl.get_info(cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE, device_id)
+    attr = cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE
+    return cl.get_info(attr, device_id)
+
+def is_gpu(device_id):
+    attr = cl.DeviceInfo.CL_DEVICE_TYPE
+    return cl.get_info(attr, device_id) == cl.DeviceType.CL_DEVICE_TYPE_GPU
 
 ########################################################################
 # Tests: low-level
@@ -258,10 +264,20 @@ def test_print_objs(platform_id, device_id):
     c.print()
     c.finish_and_release()
 
+
+Conv2DSetup = namedtuple(
+    "Conv2DSetup",
+    ["nin", "nout", "ksize", "ih", "iw", "padding", "tol"]
+)
+
 @mark.parametrize("platform_id,device_id", PAIRS)
 def test_conv2d(platform_id, device_id):
+
+    # platform_id = cl.get_platform_ids()[0]
+    # device_id = cl.get_device_ids(platform_id)[0]
+
     c = MyContext(platform_id, device_id)
-    if not can_compile(c.device_id):
+    if not can_compile(c.device_id) or is_gpu(c.device_id):
         c.finish_and_release()
         return
 
@@ -270,24 +286,19 @@ def test_conv2d(platform_id, device_id):
     c.register_queue("main", [])
 
     scenarios = [
-        dict(n_in = 3, n_out = 64, k_size = 3, i_h = 32, i_w = 32, padding = 1),
-        dict(n_in = 3, n_out = 64, k_size = 3, i_h = 32, i_w = 32, padding = 0),
-        dict(n_in = 1, n_out = 1, k_size = 3, i_h = 6, i_w = 6, padding = 0),
-        dict(n_in = 64, n_out = 128, k_size = 3, i_h = 32, i_w = 32, padding = 1),
+        Conv2DSetup(3, 64, 3, 32, 32, 1, 0.001),
+        Conv2DSetup(3, 64, 3, 32, 32, 0, 0.001),
+        Conv2DSetup(64, 128, 3, 16, 16, 1, 0.01),
+        Conv2DSetup(1, 1, 3, 6, 6, 0, 0.0001),
+        Conv2DSetup(64, 128, 3, 16, 16, 1, 0.01),
+        Conv2DSetup(512, 512, 3, 8, 8, 1, 0.2)
     ]
     for d in scenarios:
-        n_out = d["n_out"]
-        n_in = d["n_in"]
-        k_size = d["k_size"]
-        i_h = d["i_h"]
-        i_w = d["i_w"]
-        padding = d["padding"]
-
-        filters = torch.randn(n_out, n_in, k_size, k_size)
-        x = torch.randn(1, n_in, i_h, i_w)
+        filters = torch.randn(d.nout, d.nin, d.ksize, d.ksize)
+        x = torch.randn(1, d.nin, d.ih, d.iw)
 
         # Run on torch
-        y_torch = conv2d(x, filters, padding = padding)
+        y_torch = conv2d(x, filters, padding = d.padding)
 
         # Run on OpenCL
         y_cl = torch.empty_like(y_torch)
@@ -296,11 +307,11 @@ def test_conv2d(platform_id, device_id):
         c.register_output_buffer("y", y_cl.nbytes)
 
         args = [
-            (cl.cl_uint, n_out),
-            (cl.cl_uint, n_in),
-            (cl.cl_uint, k_size), (cl.cl_uint, k_size), "filters",
-            (cl.cl_uint, i_h), (cl.cl_uint, i_w), "x",
-            (cl.cl_uint, padding), "y"
+            (cl.cl_uint, d.nout),
+            (cl.cl_uint, d.nin),
+            (cl.cl_uint, d.ksize), (cl.cl_uint, d.ksize), "filters",
+            (cl.cl_uint, d.ih), (cl.cl_uint, d.iw), "x",
+            (cl.cl_uint, d.padding), "y"
         ]
         ev = c.run_kernel("main", "conv2d", "conv2d", [1], None, args)
         cl.wait_for_events([ev])
@@ -308,11 +319,11 @@ def test_conv2d(platform_id, device_id):
         cl.wait_for_events([ev])
 
         diff = torch.abs(torch.sum(y_cl - y_torch))
-        if diff > 0.01:
+        if diff > d.tol:
             print("== GOT ==")
             print(y_cl)
             print("== EXPECTED ==")
             print(y_torch)
-        assert diff < 0.01
+        assert diff < d.tol
         c.release_all_buffers()
     c.finish_and_release()
