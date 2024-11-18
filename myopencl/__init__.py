@@ -372,6 +372,11 @@ class ProgramBuildInfo(InfoEnum):
     CL_PROGRAM_BUILD_OPTIONS = 0x1182, c_char_p
     CL_PROGRAM_BUILD_LOG = 0x1183, c_char_p
 
+# We should handle this better
+INVALID_INFO = {
+    ProgramInfo.CL_PROGRAM_BINARIES
+}
+
 # Lists stuff you can query which may not be available.
 OPTIONAL_INFO = {
     ErrorCode.CL_INVALID_VALUE : {
@@ -685,6 +690,9 @@ def size_and_fill(cl_fun, cl_size_tp, cl_el_tp, *args):
     return buf
 
 def get_info(attr, *args):
+    if attr in INVALID_INFO:
+        return None
+
     tps = tuple(type(a) for a in args)
     cl_get_fun, _, info_enum, _ = TYPE_DATA[tps]
     args = args + (attr.value,)
