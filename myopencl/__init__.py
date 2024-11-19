@@ -328,7 +328,7 @@ class ProgramInfo(InfoEnum):
     CL_PROGRAM_DEVICES = 0x1163, POINTER(cl_device_id)
     CL_PROGRAM_SOURCE = 0x1164, c_char_p
     CL_PROGRAM_BINARY_SIZES = 0x1165, POINTER(c_size_t)
-    CL_PROGRAM_BINARIES = 0x1166, c_char_p
+    CL_PROGRAM_BINARIES = 0x1166, POINTER(c_char_p)
     CL_PROGRAM_NUM_KERNELS = 0x1167, c_size_t
     CL_PROGRAM_KERNEL_NAMES = 0x1168, c_char_p
 
@@ -855,8 +855,8 @@ def release(obj):
 
 
 ########################################################################
-# Level 3: Holistic functions that calls more than one OpenCL function
-# or calls the same OpenCL function in a loop
+# Level 3: Holistic functions that calls more than one OpenCL
+# function, calls the same OpenCL function in a loop, etc.
 ########################################################################
 def get_details(*args):
     tps = tuple(type(a) for a in args)

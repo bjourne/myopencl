@@ -52,3 +52,17 @@ def pp_dict(wrapper, d):
 def terminal_wrapper():
     cols = get_terminal_size()[0] if stdout.isatty() else 72
     return TextWrapper(width=cols - 4, subsequent_indent=INDENT_STR)
+
+def can_compile(device_id):
+    attr = cl.DeviceInfo.CL_DEVICE_COMPILER_AVAILABLE
+    return cl.get_info(attr, device_id)
+
+def is_gpu(device_id):
+    attr = cl.DeviceInfo.CL_DEVICE_TYPE
+    return cl.get_info(attr, device_id) == cl.DeviceType.CL_DEVICE_TYPE_GPU
+
+def platform_device_pairs():
+    s = []
+    for p in cl.get_platform_ids():
+        s.extend((p, d) for d in cl.get_device_ids(p))
+    return s

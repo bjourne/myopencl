@@ -23,3 +23,7 @@ You can use the installeed mcl-tool for diagnostics:
 ## Unit tests
 
     $ PYTHONPATH=. pytest -vs tests
+
+## Future work
+
+* Make `cl.get_info` also handle really tricky attributes.
