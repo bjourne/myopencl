@@ -6,9 +6,13 @@
 #define D_MAX   65536
 #define F_MAX   8192
 
-#define WIDTH 16
+#if WIDTH==4
 
-#if WIDTH==8
+#define vload   vload4
+#define vstore  vstore4
+typedef float4 vfloat;
+
+#elif WIDTH==8
 
 #define vload   vload8
 #define vstore  vstore8
@@ -20,11 +24,16 @@ typedef float8 vfloat;
 #define vstore  vstore16
 typedef float16 vfloat;
 
+#else
+
+#error "Define WIDTH!"
+
 #endif
 
 #define REMAIN(v, m)   ((v) & ((m) - 1))
 #define ALIGN_TO(v, m) REMAIN(v, m) ? ((v) + (m) - REMAIN(v, m)) : (v)
 
+// sc must be a multiple of WIDTH
 // F: dc fy fx sc (OK)
 // S: n sy sx sc (OK)
 // D: n dy dx dc
@@ -39,10 +48,7 @@ conv2d(uint dc_dim, uint sc_dim,
        uint pad,
        __global float * restrict D) {
 
-    // Channels in local image buffer
-    uint sc_dim_alg = ALIGN_TO(sc_dim, WIDTH);
-
-    ASSERT(sc_dim_alg >= sc_dim);
+    ASSERT(sc_dim % WIDTH == 0);
 
     // Padded source height and width
     uint py_dim = sy_dim + 2 * pad;
@@ -53,8 +59,8 @@ conv2d(uint dc_dim, uint sc_dim,
     uint dx_dim = px_dim - fx_dim + 1;
 
     uint dn = dc_dim * dy_dim * dx_dim;
-    uint fn = sc_dim_alg * fy_dim * fx_dim;
-    uint sn = sc_dim_alg * py_dim * px_dim;
+    uint fn = sc_dim * fy_dim * fx_dim;
+    uint sn = sc_dim * py_dim * px_dim;
 
     ASSERT(dn <= D_MAX);
     ASSERT(fn <= F_MAX);
@@ -64,17 +70,15 @@ conv2d(uint dc_dim, uint sc_dim,
     __private float LS[S_MAX];
     for (uint py = 0; py < py_dim; py++) {
         for (uint px = 0; px < px_dim; px++) {
-            for (uint sc = 0; sc < sc_dim_alg; sc++) {
+            for (uint sc = 0; sc < sc_dim; sc++) {
                 int sy = py - pad;
                 int sx = px - pad;
                 float v = 0;
-                if (0 <= sy && sy < sy_dim &&
-                    0 <= sx && sx < sx_dim &&
-                    sc < sc_dim) {
+                if (0 <= sy && sy < sy_dim && 0 <= sx && sx < sx_dim) {
                     uint s_addr = idx3d(sy_dim, sx_dim, sc_dim, sy, sx, sc);
                     v = S[s_addr];
                 }
-                uint d_addr = idx3d(py_dim, px_dim, sc_dim_alg, py, px, sc);
+                uint d_addr = idx3d(py_dim, px_dim, sc_dim, py, px, sc);
                 LS[d_addr] = v;
             }
         }
@@ -86,23 +90,12 @@ conv2d(uint dc_dim, uint sc_dim,
     }
     __private float LF[F_MAX];
     for (uint dc = 0; dc < dc_dim; dc++) {
-        // Read filter into local memory
-        for (uint fy = 0; fy < fy_dim; fy++) {
-            for (uint fx = 0; fx < fx_dim; fx++) {
-                for (uint sc = 0; sc < sc_dim_alg; sc++) {
-                    float v = 0;
-                    if (sc < sc_dim) {
-                        uint f_addr = idx4d(dc_dim, fy_dim, fx_dim, sc_dim,
-                                            dc, fy, fx, sc);
-                        v = F[f_addr];
-                    }
-                    uint lf_addr = idx3d(fy_dim, fx_dim, sc_dim_alg,
-                                         fy, fx, sc);
-                    LF[lf_addr] = v;
-                }
-            }
-        }
 
+        // Read filter into local memory
+        uint addr = idx4d(dc_dim, fy_dim, fx_dim, sc_dim, dc, 0, 0, 0);
+        for (uint i = 0; i < fn; i++) {
+            LF[i] = F[addr + i];
+        }
         for (uint dy = 0; dy < dy_dim; dy++) {
             for (uint dx = 0; dx < dx_dim; dx++) {
                 vfloat acc = 0;
@@ -110,9 +103,9 @@ conv2d(uint dc_dim, uint sc_dim,
                     for (uint fx = 0; fx < fx_dim; fx++) {
                         uint sy = dy + fy;
                         uint sx = dx + fx;
-                        for (uint sc = 0; sc < sc_dim_alg; sc += WIDTH) {
-                            uint s_addr = idx3d(py_dim, px_dim, sc_dim_alg, sy, sx, sc);
-                            uint f_addr = idx3d(fy_dim, fx_dim, sc_dim_alg, fy, fx, sc);
+                        for (uint sc = 0; sc < sc_dim; sc += WIDTH) {
+                            uint s_addr = idx3d(py_dim, px_dim, sc_dim, sy, sx, sc);
+                            uint f_addr = idx3d(fy_dim, fx_dim, sc_dim, fy, fx, sc);
 
                             vfloat fv = vload(f_addr / WIDTH, LF);
                             vfloat sv = vload(s_addr / WIDTH, LS);
