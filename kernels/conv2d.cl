@@ -1,35 +1,6 @@
 // Copyright (C) 2024 Björn A. Lindqvist <bjourne@gmail.com>
-
 #define DEBUG 0
-
-static inline void
-assert_impl(
-    const __constant char *fun, int line,
-    const __constant char *cond_str, bool cond
-) {
-    #if DEBUG == 1
-    if (!cond) {
-        printf("%10s, line %3d: %s FAIL!\n", fun, line, cond_str);
-    }
-    #endif
-}
-
-#define STRINGIFY(expr) #expr
-#define ASSERT(cond)    assert_impl(__func__, __LINE__, STRINGIFY(cond), cond)
-
-static inline uint
-idx4d(uint d0, uint d1, uint d2, uint d3,
-      uint i0, uint i1, uint i2, uint i3) {
-    ASSERT(i0 < d0 && i1 < d1 && i2 < d2 && i3 < d3);
-    return d1 * d2 * d3 * i0 + d2 * d3 * i1 + d3 * i2 + i3;
-}
-
-static inline uint
-idx3d(uint d0, uint d1, uint d2,
-      uint i0, uint i1, uint i2) {
-    ASSERT(i0 < d0 && i1 < d1 && i2 < d2);
-    return d1 * d2 * i0 + d2 * i1 + i2;
-}
+#include "utils.cl"
 
 #define S_MAX   65536
 #define D_MAX   65536
@@ -38,15 +9,13 @@ idx3d(uint d0, uint d1, uint d2,
 __attribute__((uses_global_work_offset(0)))
 __attribute__((max_global_work_dim(0)))
 __kernel void
-conv2d(
-uint dc_dim, uint sc_dim,
-    uint fy_dim, uint fx_dim,
-    __global const float * restrict F,
-    uint sy_dim, uint sx_dim,
-    __global const float * restrict S,
-    uint pad,
-    __global float * restrict D
-) {
+conv2d(uint dc_dim, uint sc_dim,
+       uint fy_dim, uint fx_dim,
+       __global const float * restrict F,
+       uint sy_dim, uint sx_dim,
+       __global const float * restrict S,
+       uint pad,
+       __global float * restrict D) {
 
     // Padded source height and width
     uint py_dim = sy_dim + 2 * pad;
@@ -89,14 +58,9 @@ uint dc_dim, uint sc_dim,
     __private float LF[F_MAX];
     for (uint dc = 0; dc < dc_dim; dc++) {
         // Read filter into local memory
-        for (uint sc = 0; sc < sc_dim; sc++) {
-            for (uint fy = 0; fy < fy_dim; fy++) {
-                for (uint fx = 0; fx < fx_dim; fx++) {
-                    uint l_addr = idx3d(sc_dim, fy_dim, fx_dim, sc, fy, fx);
-                    uint g_addr = idx4d(dc_dim, sc_dim, fy_dim, fx_dim, dc, sc, fy, fx);
-                    LF[l_addr] = F[g_addr];
-                }
-            }
+        uint addr = idx4d(dc_dim, sc_dim, fy_dim, fx_dim, dc, 0, 0, 0);
+        for (uint i = 0; i < fn; i++) {
+            LF[i] = F[addr + i];
         }
         for (uint dy = 0; dy < dy_dim; dy++) {
             for (uint dx = 0; dx < dx_dim; dx++) {

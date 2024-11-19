@@ -26,4 +26,4 @@ You can use the installeed mcl-tool for diagnostics:
 
 ## Future work
 
-* Make `cl.get_info` also handle really tricky attributes.
+* Make `cl.get_info` also handle tricky attributes.
