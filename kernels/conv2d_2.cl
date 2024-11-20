@@ -1,5 +1,4 @@
 // Copyright (C) 2024 Björn A. Lindqvist <bjourne@gmail.com>
-#define DEBUG 0
 #include "utils.cl"
 
 #define S_MAX   65536
@@ -24,14 +23,14 @@ typedef float8 vfloat;
 #define vstore  vstore16
 typedef float16 vfloat;
 
+#define vreduce(v)  (v[0] + v[1] + v[2] + v[3] + v[4] + v[5] + v[6] + v[7] \
+    + v[8] + v[9] + v[10] + v[11] + v[12] + v[13] + v[14] + v[15])
+
 #else
 
 #error "Define WIDTH!"
 
 #endif
-
-#define REMAIN(v, m)   ((v) & ((m) - 1))
-#define ALIGN_TO(v, m) REMAIN(v, m) ? ((v) + (m) - REMAIN(v, m)) : (v)
 
 // sc must be a multiple of WIDTH
 // F: dc fy fx sc (OK)
@@ -84,6 +83,7 @@ conv2d(uint dc_dim, uint sc_dim,
         }
     }
 
+
     __private float LD[D_MAX];
     for (uint i = 0; i < dn; i++) {
         LD[i] = 0.0f;
@@ -100,22 +100,19 @@ conv2d(uint dc_dim, uint sc_dim,
             for (uint dx = 0; dx < dx_dim; dx++) {
                 vfloat acc = 0;
                 for (uint fy = 0; fy < fy_dim; fy++) {
-                    for (uint fx = 0; fx < fx_dim; fx++) {
-                        uint sy = dy + fy;
-                        uint sx = dx + fx;
-                        for (uint sc = 0; sc < sc_dim; sc += WIDTH) {
-                            uint s_addr = idx3d(py_dim, px_dim, sc_dim, sy, sx, sc);
-                            uint f_addr = idx3d(fy_dim, fx_dim, sc_dim, fy, fx, sc);
+                    uint sy = dy + fy;
 
-                            vfloat fv = vload(f_addr / WIDTH, LF);
-                            vfloat sv = vload(s_addr / WIDTH, LS);
-                            acc += fv * sv;
-                        }
+                    for (uint i = 0; i < fx_dim * sc_dim; i += WIDTH) {
+                        uint f_addr = fx_dim * sc_dim * fy + i;
+                        uint s_addr = px_dim * sc_dim * (dy + fy) + sc_dim * dx + i;
+
+                        vfloat fv = vload(f_addr / WIDTH, LF);
+                        vfloat sv = vload(s_addr / WIDTH, LS);
+                        acc += fv * sv;
                     }
                 }
                 uint d_addr = idx3d(dy_dim, dx_dim, dc_dim, dy, dx, dc);
-                vfloat v = vload(d_addr / WIDTH, LD) + acc;
-                vstore(v, d_addr / WIDTH, LD);
+                LD[d_addr] = vreduce(acc);
             }
         }
     }

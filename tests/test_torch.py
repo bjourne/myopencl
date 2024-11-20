@@ -17,7 +17,8 @@ BUILD_OPTS = " ".join([
     "-cl-std=CL2.0",
     "-cl-unsafe-math-optimizations",
     "-I kernels",
-    f"-D WIDTH={WIDTH}"
+    f"-D WIDTH={WIDTH}",
+    f"-D DEBUG=0"
 ])
 
 Conv2DSetup = namedtuple(
