@@ -2,6 +2,8 @@
 from humanize import metric
 from myopencl.objs import MyContext
 from myopencl.utils import can_compile, platform_device_pairs
+from numpy.lib.stride_tricks import as_strided
+from numpy.linalg import norm
 from pathlib import Path
 from pytest import mark
 from time import time
@@ -178,3 +180,74 @@ def test_objs(platform_id, device_id):
         assert cl.get_info(status_key, ev) == val
     assert np.array_equal(arr1, arr2)
     c.finish_and_release()
+
+@mark.parametrize("platform_id,device_id", PAIRS)
+def test_im2col(platform_id, device_id):
+    ctx = MyContext(platform_id, device_id)
+    if not can_compile(ctx.device_id):
+        ctx.finish_and_release()
+        return
+
+    # Input dimensions
+    n, sy, sx, sc = 1, 6, 6, 3
+
+    # Filter dimensions
+    fy, fx, dc = 3, 3, 3
+
+    # Padding and strides
+    pad_y, pad_x = 1, 1
+    stride_y, stride_x = 1, 1
+
+    # Padded size
+    py = sy + 2 * pad_y
+    px = sx + 2 * pad_x
+
+    # Destination size
+    dy = (py - fy) // stride_y + 1
+    dx = (px - fx) // stride_x + 1
+
+    # Generate data
+    W = np.arange(fy * fx * sc * dc, dtype = np.float32).reshape(fy * fx * sc, dc)
+
+    X = np.arange(n * sy * sx * sc, dtype = np.float32).reshape(n, sy, sx, sc)
+    X = np.pad(X, [(0, 0), (pad_y, pad_y), (pad_x, pad_x), (0, 0)])
+
+    # Im2col
+    shape = n, dy, dx, fy, fx, sc
+    strides = 4 * np.array([
+        py * px * sc,
+        stride_y * px * sc,
+        stride_x * sc,
+        px * sc,
+        sc,
+        1
+    ])
+    X = as_strided(X, shape=shape, strides=strides).reshape(n * dy * dx, fy * fx * sc)
+
+    ctx.register_queue("main", [])
+    write_numpy_array(ctx, "main", "X", X)
+    write_numpy_array(ctx, "main", "W", W)
+
+    matmul = Path("kernels/matmul.cl")
+
+    n, m, k = X.shape[0], X.shape[1], W.shape[1]
+
+    Y = np.empty((n, k), dtype = np.float32)
+
+    nbytes = n * k * X.itemsize
+    ctx.register_output_buffer("Y", Y.nbytes)
+    ctx.register_program("matmul", matmul, BUILD_OPTS)
+
+    ev = ctx.run_kernel(
+        "main", "matmul", "matmul",
+        [1], None, [
+            (cl.cl_uint, n),
+            (cl.cl_uint, m),
+            (cl.cl_uint, k),
+            "X", "W", "Y"
+        ]
+    )
+    ev = read_numpy_array(ctx, "main", "Y", Y)
+    cl.wait_for_events([ev])
+    ctx.finish_and_release()
+    assert norm(Y - X @ W) < 0.01
