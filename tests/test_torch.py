@@ -27,6 +27,7 @@ Conv2DSetup = namedtuple(
 )
 
 CONV2D_SETUPS = [
+    Conv2DSetup(4, 1, 3, 4, 4, 1, 0.001),
     Conv2DSetup(3, 8, 3, 4, 4, 1, 0.001),
     Conv2DSetup(8, 2, 3, 4, 4, 1, 0.001),
     Conv2DSetup(3, 64, 3, 32, 32, 1, 0.001),
