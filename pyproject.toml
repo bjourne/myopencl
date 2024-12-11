@@ -1,4 +1,4 @@
-# Copyright (C) 2024 Björn A. Lindqvist
+# Copyright (C) 2024 Björn A. Lindqvist <bjourne@gmail.com>
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -15,7 +15,7 @@ classifiers = [
     "Operating System :: OS Independent"
 ]
 dependencies = [
-    "click", "humanize"
+    "click>=8.0.0", "humanize"
 ]
 readme = "README.md"
 license = {file = "LICENSE"}
