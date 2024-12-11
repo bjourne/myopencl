@@ -235,7 +235,7 @@ def test_im2col(platform_id, device_id):
     X = as_strided(X, shape, strides).reshape(n * dy * dx, fy * fx * sc)
 
     # Compute expected
-    Yexp = X @ W
+    Y_exp = X @ W
 
     # Tile and compute using OpenCL
     ts_n, ts_m, ts_k = 64, 16, 4
@@ -258,17 +258,24 @@ def test_im2col(platform_id, device_id):
     n, m = X.shape
     _, k = W.shape
 
-    Y = np.empty((n, k), dtype = np.float32)
-
-    ctx.register_output_buffer("Y", Y.nbytes)
-    ctx.register_program("matmul", matmul, " ".join(opts))
-
     args = [(cl.cl_uint, n), (cl.cl_uint, m), (cl.cl_uint, k), "X", "W", "Y"]
 
-    ev = ctx.run_kernel("main", "matmul", "matmul_tiled", [1], None, args)
-    ev = read_numpy_array(ctx, "main", "Y", Y)
-    cl.wait_for_events([ev])
+    Y_tiled = np.empty((n, k), dtype = np.float32)
+    Y_naive = np.empty((n, k), dtype = np.float32)
+
+    ctx.register_output_buffer("Y", Y_tiled.nbytes)
+    ctx.register_program("matmul", matmul, " ".join(opts))
+
+    # Run the two matmul kernels
+    ctx.run_kernel("main", "matmul", "matmul_tiled", [1], None, args)
+    read_numpy_array(ctx, "main", "Y", Y_tiled)
+    ctx.run_kernel("main", "matmul", "matmul_naive", [1], None, args)
+    read_numpy_array(ctx, "main", "Y", Y_naive)
     ctx.finish_and_release()
 
-    Y = Y[:Yexp.shape[0],:Yexp.shape[1]]
-    assert norm(Y - Yexp) < 0.01
+    Y_tiled = Y_tiled[:Y_exp.shape[0],:Y_exp.shape[1]]
+    Y_naive = Y_naive[:Y_exp.shape[0],:Y_exp.shape[1]]
+
+    assert np.array_equal(Y_tiled, Y_naive)
+    assert norm(Y_tiled - Y_exp) < 0.01
+    assert norm(Y_naive - Y_exp) < 0.01

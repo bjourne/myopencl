@@ -11,7 +11,6 @@ matmul_tiled(
     __global const float * restrict B,
     __global float * restrict C
 ) {
-
     for (uint i = 0; i < N * K; i++) {
         C[i] = 0.0;
     }
@@ -66,6 +65,9 @@ matmul_naive(
     __global const float * restrict B,
     __global float * restrict C
 ) {
+    for (uint i = 0; i < N * K; i++) {
+        C[i] = 0.0;
+    }
     for (uint n = 0; n < N; n++) {
         for (uint m = 0; m < M; m++) {
             float v = A[M * n + m];
