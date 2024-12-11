@@ -1,7 +1,4 @@
 // Copyright (C) 2024 Björn A. Lindqvist <bjourne@gmail.com>
-#define TS_N    512
-#define TS_M    256
-#define TS_K    16
 
 // NxM * MxK = NxK
 __attribute__((max_work_group_size(1,1,1)))

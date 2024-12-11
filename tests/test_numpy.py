@@ -181,6 +181,16 @@ def test_objs(platform_id, device_id):
     assert np.array_equal(arr1, arr2)
     c.finish_and_release()
 
+def align_matrix(M, y_align, x_align):
+    y, x = M.shape
+    y_rem = y % y_align
+    y_add = 0 if y_rem == 0 else y_align - y_rem
+    x_rem = x % x_align
+    x_add = 0 if x_rem == 0 else x_align - x_rem
+
+    M2 = np.pad(M, [(0, y_add), (0, x_add)])
+    return M2
+
 @mark.parametrize("platform_id,device_id", PAIRS)
 def test_im2col(platform_id, device_id):
     ctx = MyContext(platform_id, device_id)
@@ -222,7 +232,22 @@ def test_im2col(platform_id, device_id):
         sc,
         1
     ])
-    X = as_strided(X, shape=shape, strides=strides).reshape(n * dy * dx, fy * fx * sc)
+    X = as_strided(X, shape, strides).reshape(n * dy * dx, fy * fx * sc)
+
+    # Compute expected
+    Yexp = X @ W
+
+    # Tile and compute using OpenCL
+    ts_n, ts_m, ts_k = 64, 16, 4
+    opts = [
+        "-cl-std=CL2.0",
+        "-cl-unsafe-math-optimizations",
+        "-D TS_N=%d" % ts_n,
+        "-D TS_M=%d" % ts_m,
+        "-D TS_K=%d" % ts_k
+    ]
+    X = align_matrix(X, ts_n, ts_m)
+    W = align_matrix(W, ts_m, ts_k)
 
     ctx.register_queue("main", [])
     write_numpy_array(ctx, "main", "X", X)
@@ -230,24 +255,20 @@ def test_im2col(platform_id, device_id):
 
     matmul = Path("kernels/matmul.cl")
 
-    n, m, k = X.shape[0], X.shape[1], W.shape[1]
+    n, m = X.shape
+    _, k = W.shape
 
     Y = np.empty((n, k), dtype = np.float32)
 
-    nbytes = n * k * X.itemsize
     ctx.register_output_buffer("Y", Y.nbytes)
-    ctx.register_program("matmul", matmul, BUILD_OPTS)
+    ctx.register_program("matmul", matmul, " ".join(opts))
 
-    ev = ctx.run_kernel(
-        "main", "matmul", "matmul",
-        [1], None, [
-            (cl.cl_uint, n),
-            (cl.cl_uint, m),
-            (cl.cl_uint, k),
-            "X", "W", "Y"
-        ]
-    )
+    args = [(cl.cl_uint, n), (cl.cl_uint, m), (cl.cl_uint, k), "X", "W", "Y"]
+
+    ev = ctx.run_kernel("main", "matmul", "matmul_tiled", [1], None, args)
     ev = read_numpy_array(ctx, "main", "Y", Y)
     cl.wait_for_events([ev])
     ctx.finish_and_release()
-    assert norm(Y - X @ W) < 0.01
+
+    Y = Y[:Yexp.shape[0],:Yexp.shape[1]]
+    assert norm(Y - Yexp) < 0.01
