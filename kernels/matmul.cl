@@ -5,7 +5,7 @@ __attribute__((max_work_group_size(1,1,1)))
 __attribute__((uses_global_work_offset(0)))
 __attribute__((max_global_work_dim(0)))
 __kernel void
-matmul_tiled(
+matmul_tiled_sd(
     uint N, uint M, uint K,
     __global const float * restrict A,
     __global const float * restrict B,
@@ -17,7 +17,6 @@ matmul_tiled(
     for (uint n0 = 0; n0 < N / TS_N; n0++) {
         for (uint m0 = 0; m0 < M / TS_M; m0++) {
             for (uint k0 = 0; k0 < K / TS_K; k0++) {
-
                 float l_A[TS_N][TS_M];
                 float l_B[TS_M][TS_K];
                 float l_C[TS_N][TS_K];
@@ -59,7 +58,7 @@ __attribute__((max_work_group_size(1,1,1)))
 __attribute__((uses_global_work_offset(0)))
 __attribute__((max_global_work_dim(0)))
 __kernel void
-matmul_naive(
+matmul_naive_sd(
     uint N, uint M, uint K,
     __global const float * restrict A,
     __global const float * restrict B,
@@ -76,4 +75,22 @@ matmul_naive(
             }
         }
     }
+}
+
+__kernel void
+matmul_naive_nd(
+    const int N, const int M, const int K,
+    const __global float * restrict A,
+    const __global float * restrict B,
+    __global float * restrict C
+) {
+    int y = get_global_id(0);
+    int x = get_global_id(1);
+    float acc = 0;
+    for (int m = 0; m < M; m++) {
+        float a = A[M * y + m];
+        float b = B[K * m + x];
+        acc += a * b;
+    }
+    C[K * y + x] = acc;
 }

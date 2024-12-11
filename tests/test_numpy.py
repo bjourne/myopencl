@@ -267,9 +267,9 @@ def test_im2col(platform_id, device_id):
     ctx.register_program("matmul", matmul, " ".join(opts))
 
     # Run the two matmul kernels
-    ctx.run_kernel("main", "matmul", "matmul_tiled", [1], None, args)
+    ctx.run_kernel("main", "matmul", "matmul_tiled_sd", [1], None, args)
     read_numpy_array(ctx, "main", "Y", Y_tiled)
-    ctx.run_kernel("main", "matmul", "matmul_naive", [1], None, args)
+    ctx.run_kernel("main", "matmul", "matmul_naive_sd", [1], None, args)
     read_numpy_array(ctx, "main", "Y", Y_naive)
     ctx.finish_and_release()
 
