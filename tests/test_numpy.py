@@ -16,6 +16,31 @@ PAIRS = platform_device_pairs()
 VECADD = Path("kernels/vecadd.cl")
 BUILD_OPTS = "-cl-std=CL2.0 -cl-unsafe-math-optimizations"
 
+def align_matrix(M, y_align, x_align):
+    y, x = M.shape
+    y_rem = y % y_align
+    y_add = 0 if y_rem == 0 else y_align - y_rem
+    x_rem = x % x_align
+    x_add = 0 if x_rem == 0 else x_align - x_rem
+
+    M2 = np.pad(M, [(0, y_add), (0, x_add)])
+    return M2
+
+def tile_matrix(M, ts_y, ts_x):
+    y, x = M.shape
+    assert y % ts_y == 0
+    assert x % ts_x == 0
+    shape = (y // ts_y, x // ts_x, ts_y, ts_x)
+    strides = 4 * np.array([ts_y * x, ts_x, x, 1])
+    M = as_strided(M, shape, strides)
+    return np.ascontiguousarray(M)
+
+# GPT wrote this
+def untile_matrix(M):
+    y, x, ts_y, ts_x = M.shape
+    M = M.transpose(0, 2, 1, 3)
+    return M.reshape(y * ts_y, x * ts_x)
+
 def write_numpy_array(c, qname, bname, x):
     cptr = np.ctypeslib.as_ctypes(x)
     return c.register_input_buffer(qname, bname, x.nbytes, cptr)
@@ -181,15 +206,58 @@ def test_objs(platform_id, device_id):
     assert np.array_equal(arr1, arr2)
     c.finish_and_release()
 
-def align_matrix(M, y_align, x_align):
-    y, x = M.shape
-    y_rem = y % y_align
-    y_add = 0 if y_rem == 0 else y_align - y_rem
-    x_rem = x % x_align
-    x_add = 0 if x_rem == 0 else x_align - x_rem
 
-    M2 = np.pad(M, [(0, y_add), (0, x_add)])
-    return M2
+@mark.parametrize("platform_id,device_id", PAIRS)
+def test_matmul(platform_id, device_id):
+    ctx = MyContext(platform_id, device_id)
+    if not can_compile(ctx.device_id):
+        ctx.finish_and_release()
+        return
+
+    n, m, k = 2048, 2048, 2048
+    ts_n, ts_m, ts_k, ts = 512, 256, 16, 16
+    assert n % ts_n == 0 and m % ts_m == 0 and k % ts_k == 0
+
+    path = Path("kernels/matmul.cl")
+    opts = [
+        "-cl-std=CL2.0",
+        "-cl-unsafe-math-optimizations",
+        "-D TS_N=%d" % ts_n,
+        "-D TS_M=%d" % ts_m,
+        "-D TS_K=%d" % ts_k,
+        "-D TS=%d" % ts
+    ]
+    ctx.register_program("matmul", path, " ".join(opts))
+    ctx.register_queue("main", [])
+
+    # Setup data
+    A = np.random.uniform(size = (n, m)).astype(np.float32) - 0.5
+    B = np.random.uniform(size = (m, k)).astype(np.float32) - 0.5
+    C_tiled = np.empty((n // ts_n, k // ts_k, ts_n, ts_k), dtype = np.float32)
+    A_tiled = tile_matrix(A, ts_n, ts_m)
+    B_tiled = tile_matrix(B, ts_m, ts_k)
+
+    write_numpy_array(ctx, "main", "A", A_tiled)
+    write_numpy_array(ctx, "main", "B", B_tiled)
+    ctx.register_output_buffer("C", C_tiled.nbytes)
+
+    bef = time()
+    ctx.run_kernel(
+        "main", "matmul", "matmul_tiled_tiled_sd",
+        [1], None, [
+            (cl.cl_uint, n),
+            (cl.cl_uint, m),
+            (cl.cl_uint, k),
+            "A", "B", "C"
+        ]
+    )
+    ev = read_numpy_array(ctx, "main", "C", C_tiled)
+    cl.wait_for_events([ev])
+
+    print('%4d/%4d/%4d: %.2f' % (n, m, k, time() - bef))
+    C = untile_matrix(C_tiled)
+    assert np.linalg.norm(C - A @ B) < 0.01
+    ctx.finish_and_release()
 
 @mark.parametrize("platform_id,device_id", PAIRS)
 def test_im2col(platform_id, device_id):
