@@ -94,3 +94,41 @@ matmul_naive_nd(
     }
     C[K * y + x] = acc;
 }
+
+// Tiling is not efficient on CPU
+//
+// NxM * MxK = NxK
+__kernel void matmul_tiled_nd(
+    int N, int M, int K,
+    const __global float* A,
+    const __global float* B,
+    __global float* C) {
+
+    // Local and global coords
+    int ly = get_local_id(0);
+    int lx = get_local_id(1);
+    int gy = TS*get_group_id(0) + ly;
+    int gx = TS*get_group_id(1) + lx;
+
+    __local float LA[TS][TS];
+    __local float LB[TS][TS];
+
+    float acc = 0;
+
+    for (int t = 0; t < M / TS; t++) {
+
+        // Load tiles
+        int ty = TS*t + ly;
+        int tx = TS*t + lx;
+        LA[ly][lx] = A[M * gy + tx];
+        LB[ly][lx] = B[K * ty + gx];
+
+        barrier(CLK_LOCAL_MEM_FENCE);
+
+        for (int k = 0; k < TS; k++) {
+            acc += LA[ly][k] * LB[k][lx];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    C[K*gy + gx] = acc;
+}

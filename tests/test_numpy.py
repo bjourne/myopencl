@@ -199,7 +199,7 @@ def test_im2col(platform_id, device_id):
         return
 
     # Input dimensions
-    n, sy, sx, sc = 1, 6, 6, 3
+    n, sy, sx, sc = 128, 6, 6, 3
 
     # Filter dimensions
     fy, fx, dc = 3, 3, 3
@@ -218,7 +218,6 @@ def test_im2col(platform_id, device_id):
 
     # Generate data
     W = np.arange(fy * fx * sc * dc, dtype = np.float32).reshape(fy * fx * sc, dc)
-
     X = np.arange(n * sy * sx * sc, dtype = np.float32).reshape(n, sy, sx, sc)
     X = np.pad(X, [(0, 0), (pad_y, pad_y), (pad_x, pad_x), (0, 0)])
 
@@ -238,13 +237,14 @@ def test_im2col(platform_id, device_id):
     Y_exp = X @ W
 
     # Tile and compute using OpenCL
-    ts_n, ts_m, ts_k = 64, 16, 4
+    ts_n, ts_m, ts_k, ts = 64, 16, 16, 16
     opts = [
         "-cl-std=CL2.0",
         "-cl-unsafe-math-optimizations",
         "-D TS_N=%d" % ts_n,
         "-D TS_M=%d" % ts_m,
-        "-D TS_K=%d" % ts_k
+        "-D TS_K=%d" % ts_k,
+        "-D TS=%d" % ts
     ]
     X = align_matrix(X, ts_n, ts_m)
     W = align_matrix(W, ts_m, ts_k)
@@ -263,20 +263,23 @@ def test_im2col(platform_id, device_id):
 
     # Run multiple different matmul variants
     matmuls = [
-        ("matmul_tiled_sd", [1]),
-        ("matmul_naive_sd", [1]),
-        ("matmul_naive_nd", [n, k])
+        ("matmul_naive_sd", [1], None),
+        ("matmul_naive_nd", [n, k], None),
+        ("matmul_tiled_sd", [1], None),
+        ("matmul_tiled_nd", [n, k], [ts, ts])
     ]
 
     Y = np.empty((n, k), dtype = np.float32)
     ctx.register_output_buffer("Y", Y.nbytes)
     path = Path("kernels/matmul.cl")
     ctx.register_program("matmul", path, " ".join(opts))
-    for kname, gwork in matmuls:
-        ctx.run_kernel("main", "matmul", kname, gwork, None, args)
+    for kname, gwork, lwork in matmuls:
+        bef = time()
+        ctx.run_kernel("main", "matmul", kname, gwork, lwork, args)
         ev = read_numpy_array(ctx, "main", "Y", Y)
         cl.wait_for_events([ev])
         Y_out = Y[:Y_exp.shape[0],:Y_exp.shape[1]]
+        err = norm(Y_out - Y_exp)
+        assert err < 0.01
         assert np.array_equal(Y_out, Y_exp)
-        assert norm(Y_out - Y_exp) < 0.01
     ctx.finish_and_release()
