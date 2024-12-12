@@ -253,29 +253,30 @@ def test_im2col(platform_id, device_id):
     write_numpy_array(ctx, "main", "X", X)
     write_numpy_array(ctx, "main", "W", W)
 
-    matmul = Path("kernels/matmul.cl")
-
     n, m = X.shape
     _, k = W.shape
 
-    args = [(cl.cl_uint, n), (cl.cl_uint, m), (cl.cl_uint, k), "X", "W", "Y"]
+    args = [
+        (cl.cl_uint, n), (cl.cl_uint, m), (cl.cl_uint, k),
+        "X", "W", "Y"
+    ]
 
-    Y_tiled = np.empty((n, k), dtype = np.float32)
-    Y_naive = np.empty((n, k), dtype = np.float32)
+    # Run multiple different matmul variants
+    matmuls = [
+        ("matmul_tiled_sd", [1]),
+        ("matmul_naive_sd", [1]),
+        ("matmul_naive_nd", [n, k])
+    ]
 
-    ctx.register_output_buffer("Y", Y_tiled.nbytes)
-    ctx.register_program("matmul", matmul, " ".join(opts))
-
-    # Run the two matmul kernels
-    ctx.run_kernel("main", "matmul", "matmul_tiled_sd", [1], None, args)
-    read_numpy_array(ctx, "main", "Y", Y_tiled)
-    ctx.run_kernel("main", "matmul", "matmul_naive_sd", [1], None, args)
-    read_numpy_array(ctx, "main", "Y", Y_naive)
+    Y = np.empty((n, k), dtype = np.float32)
+    ctx.register_output_buffer("Y", Y.nbytes)
+    path = Path("kernels/matmul.cl")
+    ctx.register_program("matmul", path, " ".join(opts))
+    for kname, gwork in matmuls:
+        ctx.run_kernel("main", "matmul", kname, gwork, None, args)
+        ev = read_numpy_array(ctx, "main", "Y", Y)
+        cl.wait_for_events([ev])
+        Y_out = Y[:Y_exp.shape[0],:Y_exp.shape[1]]
+        assert np.array_equal(Y_out, Y_exp)
+        assert norm(Y_out - Y_exp) < 0.01
     ctx.finish_and_release()
-
-    Y_tiled = Y_tiled[:Y_exp.shape[0],:Y_exp.shape[1]]
-    Y_naive = Y_naive[:Y_exp.shape[0],:Y_exp.shape[1]]
-
-    assert np.array_equal(Y_tiled, Y_naive)
-    assert norm(Y_tiled - Y_exp) < 0.01
-    assert norm(Y_naive - Y_exp) < 0.01
