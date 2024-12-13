@@ -47,10 +47,16 @@ def list_platforms():
     "-I", "include_paths",
     type = click.Path(exists = True, file_okay = False, dir_okay = True),
     multiple = True,
-    help = "Include path.",
+    help = "Include path",
     default = ()
 )
-def build_program(filename, platform_index, include_paths):
+@click.option(
+    "-D", "defines",
+    multiple = True,
+    help = "Definition",
+    default = ()
+)
+def build_program(filename, platform_index, include_paths, defines):
     """Build an OpenCL program and list its details. If the extension
     of FILENAME Is not .cl it is assumed to be a binary.
     """
@@ -72,10 +78,13 @@ def build_program(filename, platform_index, include_paths):
         prog = cl.create_program_with_source(ctx, data.decode("utf-8"))
     else:
         prog = cl.create_program_with_binary(ctx, dev, data)
+
+    includes = [f"-I {ip}" for ip in include_paths]
+    defines = [f"-D {kv}" for kv in defines]
     opts = [
         "-cl-std=CL2.0",
         "-cl-kernel-arg-info"
-    ] + [f"-I {ip}" for ip in include_paths]
+    ] + includes + defines
     cl.build_program(prog, dev, " ".join(opts), True, True)
 
     wrap = terminal_wrapper()
