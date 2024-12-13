@@ -218,7 +218,7 @@ def test_matmul(platform_id, device_id):
     ts_n, ts_m, ts_k, ts = 512, 256, 16, 16
     assert n % ts_n == 0 and m % ts_m == 0 and k % ts_k == 0
 
-    path = Path("kernels/matmul.cl")
+    path = Path("kernels/matmul_tiled.cl")
     opts = [
         "-cl-std=CL2.0",
         "-cl-unsafe-math-optimizations",
@@ -243,7 +243,7 @@ def test_matmul(platform_id, device_id):
 
     bef = time()
     ctx.run_kernel(
-        "main", "matmul", "matmul_tiled_tiled_sd",
+        "main", "matmul", "matmul_sd",
         [1], None, [
             (cl.cl_uint, n),
             (cl.cl_uint, m),
