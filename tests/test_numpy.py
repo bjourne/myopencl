@@ -1,7 +1,7 @@
 # Copyright (C) 2024 Björn A. Lindqvist <bjourne@gmail.com>
 from humanize import metric
 from myopencl.objs import MyContext
-from myopencl.utils import can_compile, platform_device_pairs
+from myopencl.utils import can_compile, is_gpu, platform_device_pairs
 from numpy.lib.stride_tricks import as_strided
 from numpy.linalg import norm
 from pathlib import Path
@@ -210,7 +210,7 @@ def test_objs(platform_id, device_id):
 @mark.parametrize("platform_id,device_id", PAIRS)
 def test_matmul(platform_id, device_id):
     ctx = MyContext(platform_id, device_id)
-    if not can_compile(ctx.device_id):
+    if not can_compile(device_id) or is_gpu(device_id):
         ctx.finish_and_release()
         return
 
