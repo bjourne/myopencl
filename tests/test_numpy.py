@@ -1,4 +1,4 @@
-# Copyright (C) 2024 Björn A. Lindqvist <bjourne@gmail.com>
+# Copyright (C) 2024-2025 Björn A. Lindqvist <bjourne@gmail.com>
 from humanize import metric
 from myopencl.objs import MyContext
 from myopencl.utils import can_compile, is_gpu, platform_device_pairs
@@ -215,17 +215,17 @@ def test_matmul(platform_id, device_id):
         return
 
     n, m, k = 2048, 2048, 2048
-    ts_n, ts_m, ts_k, ts = 512, 256, 16, 16
+    ts_n, ts_m, ts_k = 512, 256, 16
     assert n % ts_n == 0 and m % ts_m == 0 and k % ts_k == 0
 
-    path = Path("kernels/matmul_tiled.cl")
+    path = Path("kernels/matmul.cl")
     opts = [
         "-cl-std=CL2.0",
         "-cl-unsafe-math-optimizations",
         "-D TS_N=%d" % ts_n,
         "-D TS_M=%d" % ts_m,
         "-D TS_K=%d" % ts_k,
-        "-D TS=%d" % ts
+        "-D TS=%d" % 123
     ]
     ctx.register_program("matmul", path, " ".join(opts))
     ctx.register_queue("main", [])
@@ -243,7 +243,7 @@ def test_matmul(platform_id, device_id):
 
     bef = time()
     ctx.run_kernel(
-        "main", "matmul", "matmul_sd",
+        "main", "matmul", "matmul_tiled_sd2",
         [1], None, [
             (cl.cl_uint, n),
             (cl.cl_uint, m),
