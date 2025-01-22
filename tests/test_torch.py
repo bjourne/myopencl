@@ -121,13 +121,13 @@ def test_conv2d(platform_id, device_id):
     c.finish_and_release()
 
 @mark.parametrize("platform_id, device_id", PAIRS)
-def test_conv2d_2(platform_id, device_id):
+def test_conv2d_fix(platform_id, device_id):
     c = MyContext(platform_id, device_id)
     if not can_compile(c.device_id) or is_gpu(c.device_id):
         c.finish_and_release()
         return
 
-    path = Path("kernels/conv2d_2.cl")
+    path = Path("kernels/conv2d_fix.cl")
     c.register_program("conv2d", path, BUILD_OPTS)
     c.register_queue("main", [])
 

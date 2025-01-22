@@ -1,4 +1,6 @@
 // Copyright (C) 2024 Björn A. Lindqvist <bjourne@gmail.com>
+//
+// This kernel is not meant to be fast but fairly simple.
 #define DEBUG 0
 #include "utils.cl"
 
