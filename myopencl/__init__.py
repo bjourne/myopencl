@@ -1,4 +1,4 @@
-# Copyright (C) 2024 Björn A. Lindqvist
+# Copyright (C) 2024-2025 Björn A. Lindqvist <bjourne@gmail.com>
 from ctypes import *
 from enum import Enum, Flag, IntEnum
 
@@ -93,6 +93,9 @@ class cl_device_mem_cache_type(cl_uint):
 
 # Event
 cl_event_info = cl_uint
+
+class cl_profiling_info(cl_uint):
+    pass
 
 # Kernel
 cl_kernel_info = cl_uint
@@ -293,6 +296,12 @@ class EventInfo(InfoEnum):
     CL_EVENT_COMMAND_EXECUTION_STATUS = 0x11D3, cl_command_execution_status
     CL_EVENT_CONTEXT = 0x11D4, cl_context
 
+class ProfilingInfo(InfoEnum):
+    CL_PROFILING_COMMAND_QUEUED = 0x1280, cl_ulong
+    CL_PROFILING_COMMAND_SUBMIT = 0x1281, cl_ulong
+    CL_PROFILING_COMMAND_START = 0x1282, cl_ulong
+    CL_PROFILING_COMMAND_END = 0x1283, cl_ulong
+    CL_PROFILING_COMMAND_COMPLETE = 0x1284, cl_ulong
 
 class MemFlags(Enum):
     CL_MEM_READ_WRITE = 1 << 0
@@ -576,77 +585,72 @@ so.clBuildProgram.argtypes = [
 # Map types to info
 TYPE_DATA = {
     (cl_command_queue,) : (
-        so.clGetCommandQueueInfo,
+        {CommandQueueInfo : so.clGetCommandQueueInfo},
         so.clReleaseCommandQueue,
-        CommandQueueInfo,
         [cl_command_queue, cl_command_queue_info]
     ),
     (cl_context,) : (
-        so.clGetContextInfo,
+        {ContextInfo : so.clGetContextInfo},
         so.clReleaseContext,
-        ContextInfo,
         [cl_context, cl_context_info]
     ),
     (cl_device_id,) : (
-        so.clGetDeviceInfo,
+        {DeviceInfo : so.clGetDeviceInfo},
         so.clReleaseDevice,
-        DeviceInfo,
         [cl_device_id, cl_device_info]
     ),
     (cl_event,) : (
-        so.clGetEventInfo,
+        {
+            EventInfo : so.clGetEventInfo,
+            ProfilingInfo : so.clGetEventProfilingInfo
+        },
         so.clReleaseEvent,
-        EventInfo,
         [cl_event, cl_event_info]
     ),
     (cl_kernel,) : (
-        so.clGetKernelInfo,
+        {KernelInfo : so.clGetKernelInfo},
         so.clReleaseKernel,
-        KernelInfo,
         [cl_kernel, cl_kernel_info]
     ),
     (cl_kernel, int) : (
-        so.clGetKernelArgInfo,
-        so.clReleaseKernel,
-        KernelArgInfo,
+        {KernelArgInfo : so.clGetKernelArgInfo},
+        None,
         [cl_kernel, cl_uint, cl_kernel_arg_info]
     ),
     (cl_mem,) : (
-        so.clGetMemObjectInfo,
+        {MemInfo : so.clGetMemObjectInfo},
         so.clReleaseMemObject,
-        MemInfo,
         [cl_mem, cl_mem_info]
     ),
     (cl_platform_id,) : (
-        so.clGetPlatformInfo,
+        {PlatformInfo : so.clGetPlatformInfo},
         None,
-        PlatformInfo,
         [cl_platform_id, cl_platform_info]
     ),
     (cl_program,) : (
-        so.clGetProgramInfo,
+        {ProgramInfo : so.clGetProgramInfo},
         so.clReleaseProgram,
-        ProgramInfo,
         [cl_program, cl_program_info]
     ),
     (cl_program, cl_device_id) : (
-        so.clGetProgramBuildInfo,
+        {ProgramBuildInfo : so.clGetProgramBuildInfo},
         None,
-        ProgramBuildInfo,
         [cl_program, cl_device_id, cl_program_build_info]
     )
 }
 
 # Automatically generate bindings for all clRelease* and clGet*Info
-# functions since they work basically the same.
-for ocl_types, (info_fun, rel_fun, _, info_args) in TYPE_DATA.items():
+# functions since they are all similar.
+for ocl_types, (infos, rel_fun, info_args) in TYPE_DATA.items():
     if rel_fun:
         ocl_type = ocl_types[0]
         rel_fun.restype = cl_int
         rel_fun.argtypes = [ocl_type]
-    argtypes = info_args + [c_size_t, c_void_p, POINTER(c_size_t)]
-    info_fun.restype = cl_int
-    info_fun.argtypes = argtypes
+
+    for info_fun in infos.values():
+        argtypes = info_args + [c_size_t, c_void_p, POINTER(c_size_t)]
+        info_fun.restype = cl_int
+        info_fun.argtypes = argtypes
 
 ########################################################################
 # Level 3: Functional API
@@ -700,10 +704,10 @@ def get_info(attr, *args):
         return None
 
     tps = tuple(type(a) for a in args)
-    cl_get_fun, _, info_enum, _ = TYPE_DATA[tps]
+    get_fun = TYPE_DATA[tps][0][type(attr)]
     args = args + (attr.value,)
     try:
-        buf = size_and_fill(cl_get_fun, c_size_t, c_byte, *args)
+        buf = size_and_fill(get_fun, c_size_t, c_byte, *args)
     except OpenCLError as e:
         for ec, opt_attrs in OPTIONAL_INFO.items():
             if e.code == ec and attr in opt_attrs:
@@ -856,7 +860,7 @@ def build_program(prog, dev, opts, throw, print_log):
 
 def release(obj):
     tps = type(obj),
-    _, ocl_rel_fun, _, _ = TYPE_DATA[tps]
+    _, ocl_rel_fun, _ = TYPE_DATA[tps]
     check(ocl_rel_fun(obj))
 
 
@@ -866,8 +870,9 @@ def release(obj):
 ########################################################################
 def get_details(*args):
     tps = tuple(type(a) for a in args)
-    _, _, info_enum, _ = TYPE_DATA[tps]
-    return {k : get_info(k, *args) for k in info_enum}
+    info_enums = TYPE_DATA[tps][0].keys()
+    info_enums = sum([list(keys) for keys in info_enums], [])
+    return {k : get_info(k, *args) for k in info_enums}
 
 def get_kernel_names(prog):
     names = get_info(

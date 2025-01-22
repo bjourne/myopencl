@@ -128,7 +128,7 @@ def test_conv2d(platform_id, device_id):
 
 @mark.parametrize("platform_id, device_id", PAIRS)
 def test_conv2d_fix(platform_id, device_id):
-g    c = Context(platform_id, device_id)
+    c = Context(platform_id, device_id)
     if not can_compile(c.device_id) or is_gpu(c.device_id):
         c.finish_and_release()
         return
