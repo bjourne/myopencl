@@ -67,6 +67,7 @@ conv2d(uint dc_dim, uint sc_dim,
     ASSERT(fn <= F_MAX);
     ASSERT(sn <= S_MAX);
     ASSERT(fy_dim == K_SIZE && fx_dim == K_SIZE);
+    ASSERT(sc_dim % V_SIZE == 0);
 
     // Read padded image into local memory
     __private float LS[S_MAX];

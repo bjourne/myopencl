@@ -1,7 +1,7 @@
 # Copyright (C) 2024-2025 Björn A. Lindqvist
 from collections import namedtuple
 from einops import rearrange
-from myopencl.objs import MyContext
+from myopencl.objs import Context
 from myopencl.utils import can_compile, is_gpu, platform_device_pairs
 from pathlib import Path
 from pytest import mark
@@ -11,9 +11,10 @@ import ctypes
 import myopencl as cl
 import torch
 
+PAIRS = platform_device_pairs()
+
 V_SIZE = 16
 K_SIZE = 3
-PAIRS = platform_device_pairs()
 BUILD_OPTS = " ".join([
     "-cl-std=CL2.0",
     "-cl-unsafe-math-optimizations",
@@ -57,6 +58,16 @@ def read_torch_tensor(ctx, q_name, buf_name, x):
     c_ptr = ctypes.cast(x.data_ptr(), ctypes.c_void_p)
     return ctx.read_buffer(q_name, buf_name, x.nbytes, c_ptr)
 
+def compare_tensors(t1, t2, tol):
+    assert t1.shape == t2.shape
+    diff = torch.abs(torch.sum(t1 - t2))
+    if diff > tol:
+        print("== GOT ==")
+        print(t1)
+        print("== EXPECTED ==")
+        print(t2)
+    assert diff < tol
+
 ########################################################################
 # Tests
 ########################################################################
@@ -65,7 +76,7 @@ def test_torch_tensors(platform_id, device_id):
     orig = torch.randn((64, 3, 3, 3, 25))
     new = torch.empty_like(orig)
 
-    ctx = MyContext(platform_id, device_id)
+    ctx = Context(platform_id, device_id)
     ctx.register_queue("main", [])
 
     ev1 = write_torch_tensor(ctx, "main", "x", orig)
@@ -77,7 +88,7 @@ def test_torch_tensors(platform_id, device_id):
 
 @mark.parametrize("platform_id,device_id", PAIRS)
 def test_conv2d(platform_id, device_id):
-    c = MyContext(platform_id, device_id)
+    c = Context(platform_id, device_id)
     if not can_compile(c.device_id) or is_gpu(c.device_id):
         c.finish_and_release()
         return
@@ -110,19 +121,14 @@ def test_conv2d(platform_id, device_id):
         ev = read_torch_tensor(c, "main", "y", Y_cl)
         cl.wait_for_events([ev])
 
-        diff = torch.abs(torch.sum(Y_cl - Y_torch))
-        if diff > d.tol:
-            print("== GOT ==")
-            print(Y_cl)
-            print("== EXPECTED ==")
-            print(Y_torch)
-        assert diff < d.tol
+        compare_tensors(Y_cl, Y_torch, d.tol)
+
         c.release_all_buffers()
     c.finish_and_release()
 
 @mark.parametrize("platform_id, device_id", PAIRS)
 def test_conv2d_fix(platform_id, device_id):
-    c = MyContext(platform_id, device_id)
+g    c = Context(platform_id, device_id)
     if not can_compile(c.device_id) or is_gpu(c.device_id):
         c.finish_and_release()
         return
@@ -171,14 +177,7 @@ def test_conv2d_fix(platform_id, device_id):
         cl.wait_for_events([ev])
 
         Y_cl = rearrange(Y_cl, "n dy dx dc -> n dc dy dx")
-        assert Y_cl.shape == Y_torch.shape
 
-        diff = torch.abs(torch.sum(Y_cl - Y_torch))
-        if diff > d.tol:
-            print("== GOT ==")
-            print(y_cl)
-            print("== EXPECTED ==")
-            print(y_torch)
-        assert diff < d.tol
+        compare_tensors(Y_cl, Y_torch, d.tol)
         c.release_all_buffers()
     c.finish_and_release()

@@ -1,6 +1,6 @@
 # Copyright (C) 2024-2025 Björn A. Lindqvist <bjourne@gmail.com>
 from humanize import metric
-from myopencl.objs import MyContext
+from myopencl.objs import Context
 from myopencl.utils import can_compile, is_gpu, platform_device_pairs
 from numpy.lib.stride_tricks import as_strided
 from numpy.linalg import norm
@@ -116,7 +116,7 @@ def test_vecadd_objs(platform_id, device_id):
     B = np.random.uniform(size = (n_els,)).astype(np.float32)
     C = np.empty_like(A)
 
-    c = MyContext(platform_id, device_id)
+    c = Context(platform_id, device_id)
     if not can_compile(c.device_id):
         c.finish_and_release()
         return
@@ -149,7 +149,7 @@ def test_vecadd_objs(platform_id, device_id):
 
 @mark.parametrize("platform_id, device_id", PAIRS)
 def test_ooo_queue(platform_id, device_id):
-    ctx = MyContext(platform_id, device_id)
+    ctx = Context(platform_id, device_id)
 
     prop_key = cl.CommandQueueInfo.CL_QUEUE_PROPERTIES
     prop_val = cl.CommandQueueProperties.CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE
@@ -185,7 +185,7 @@ def test_ooo_queue(platform_id, device_id):
 def test_objs(platform_id, device_id):
     status_key = cl.EventInfo.CL_EVENT_COMMAND_EXECUTION_STATUS
 
-    c = MyContext(platform_id, device_id)
+    c = Context(platform_id, device_id)
     c.register_queue("main0", [])
     c.register_queue("main1", [])
 
@@ -209,7 +209,7 @@ def test_objs(platform_id, device_id):
 
 @mark.parametrize("platform_id,device_id", PAIRS)
 def test_matmul(platform_id, device_id):
-    ctx = MyContext(platform_id, device_id)
+    ctx = Context(platform_id, device_id)
     if not can_compile(device_id) or is_gpu(device_id):
         ctx.finish_and_release()
         return
@@ -261,7 +261,7 @@ def test_matmul(platform_id, device_id):
 
 @mark.parametrize("platform_id,device_id", PAIRS)
 def test_im2col(platform_id, device_id):
-    ctx = MyContext(platform_id, device_id)
+    ctx = Context(platform_id, device_id)
     if not can_compile(ctx.device_id):
         ctx.finish_and_release()
         return

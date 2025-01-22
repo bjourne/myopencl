@@ -1,7 +1,7 @@
-# Copyright (C) 2024 Björn A. Lindqvist
+# Copyright (C) 2024-2025 Björn A. Lindqvist <bjourne@gmail.com>
 
 # Names:
-#   * c - MyContext
+#   * c - Context
 #   * cptr - C pointer
 #   * bname - buffer name
 #   * qname - queue name
@@ -27,12 +27,12 @@ def name_event(*args):
     EVENT_CNT += 1
     return s
 
-class MyContext:
+class Context:
     @classmethod
     def from_indexes(cls, platform_idx, device_idx):
         platform_id = cl.get_platform_ids()[platform_idx]
         device_id = cl.get_device_ids(platform_id)[device_idx]
-        return MyContext(platform_id, device_id)
+        return Context(platform_id, device_id)
 
     def __init__(self, platform_id, device_id):
         self.platform_id = platform_id
