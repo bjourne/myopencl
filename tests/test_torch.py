@@ -11,14 +11,16 @@ import ctypes
 import myopencl as cl
 import torch
 
-WIDTH = 16
+V_SIZE = 16
+K_SIZE = 3
 PAIRS = platform_device_pairs()
 BUILD_OPTS = " ".join([
     "-cl-std=CL2.0",
     "-cl-unsafe-math-optimizations",
     "-I kernels",
-    f"-D WIDTH={WIDTH}",
-    f"-D DEBUG=0"
+    f"-D V_SIZE={V_SIZE}",
+    f"-D K_SIZE={K_SIZE}",
+    f"-D DEBUG=1"
 ])
 
 Conv2DSetup = namedtuple(
@@ -149,8 +151,8 @@ def test_conv2d_2(platform_id, device_id):
         X = rearrange(X, "n sc sy sx -> n sy sx sc").contiguous()
         W = rearrange(W, "dc sc fy fx -> dc fy fx sc").contiguous()
 
-        rem = sc % WIDTH
-        n_pad = WIDTH - rem if rem else 0
+        rem = sc % V_SIZE
+        n_pad = V_SIZE - rem if rem else 0
         X = pad(X, (0, n_pad), "constant", 0)
         W = pad(W, (0, n_pad), "constant", 0)
 

@@ -1,23 +1,25 @@
-// Copyright (C) 2024 Björn A. Lindqvist <bjourne@gmail.com>
+// Copyright (C) 2024-2025 Björn A. Lindqvist <bjourne@gmail.com>
 #include "utils.cl"
+
+#define REG_LEN                     64
 
 #define S_MAX   65536
 #define D_MAX   65536
 #define F_MAX   8192
 
-#if WIDTH==4
+#if V_SIZE==4
 
 #define vload   vload4
 #define vstore  vstore4
 typedef float4 vfloat;
 
-#elif WIDTH==8
+#elif V_SIZE==8
 
 #define vload   vload8
 #define vstore  vstore8
 typedef float8 vfloat;
 
-#elif WIDTH==16
+#elif V_SIZE==16
 
 #define vload   vload16
 #define vstore  vstore16
@@ -28,11 +30,11 @@ typedef float16 vfloat;
 
 #else
 
-#error "Define WIDTH!"
+#error "Define V_SIZE!"
 
 #endif
 
-// sc must be a multiple of WIDTH
+// sc must be a multiple of V_SIZE
 // F: dc fy fx sc (OK)
 // S: n sy sx sc (OK)
 // D: n dy dx dc
@@ -47,7 +49,7 @@ conv2d(uint dc_dim, uint sc_dim,
        uint pad,
        __global float * restrict D) {
 
-    ASSERT(sc_dim % WIDTH == 0);
+    ASSERT(sc_dim % V_SIZE == 0);
 
     // Padded source height and width
     uint py_dim = sy_dim + 2 * pad;
@@ -64,6 +66,7 @@ conv2d(uint dc_dim, uint sc_dim,
     ASSERT(dn <= D_MAX);
     ASSERT(fn <= F_MAX);
     ASSERT(sn <= S_MAX);
+    ASSERT(fy_dim == K_SIZE && fx_dim == K_SIZE);
 
     // Read padded image into local memory
     __private float LS[S_MAX];
@@ -83,7 +86,6 @@ conv2d(uint dc_dim, uint sc_dim,
         }
     }
 
-
     __private float LD[D_MAX];
     for (uint i = 0; i < dn; i++) {
         LD[i] = 0.0f;
@@ -96,23 +98,38 @@ conv2d(uint dc_dim, uint sc_dim,
         for (uint i = 0; i < fn; i++) {
             LF[i] = F[addr + i];
         }
-        for (uint dy = 0; dy < dy_dim; dy++) {
-            for (uint dx = 0; dx < dx_dim; dx++) {
-                vfloat acc = 0;
-                for (uint fy = 0; fy < fy_dim; fy++) {
-                    uint sy = dy + fy;
 
-                    for (uint i = 0; i < fx_dim * sc_dim; i += WIDTH) {
-                        uint f_addr = fx_dim * sc_dim * fy + i;
+#pragma ivdep
+        for (uint dy = 0; dy < dy_dim; dy++) {
+#pragma ivdep
+            for (uint dx = 0; dx < dx_dim; dx++) {
+
+                vfloat acc[REG_LEN] = {0};
+#pragma ii 1
+                for (uint i = 0; i < K_SIZE * sc_dim; i += V_SIZE) {
+#pragma unroll
+                    for (uint fy = 0; fy < 3; fy++) {
+                        uint f_addr = K_SIZE * sc_dim * fy + i;
                         uint s_addr = px_dim * sc_dim * (dy + fy) + sc_dim * dx + i;
 
-                        vfloat fv = vload(f_addr / WIDTH, LF);
-                        vfloat sv = vload(s_addr / WIDTH, LS);
-                        acc += fv * sv;
+                        vfloat fv = vload(f_addr / V_SIZE, LF);
+                        vfloat sv = vload(s_addr / V_SIZE, LS);
+
+                        vfloat sum = acc[0] + fv * sv;
+#pragma unroll
+                        for (uint j = 0; j < REG_LEN - 1; j++) {
+                            acc[j] = acc[j + 1];
+                        }
+                        acc[REG_LEN - 1] = sum;
                     }
                 }
                 uint d_addr = idx3d(dy_dim, dx_dim, dc_dim, dy, dx, dc);
-                LD[d_addr] = vreduce(acc);
+                vfloat acc0 = 0;
+#pragma unroll
+                for (uint i = 0; i < REG_LEN; i++) {
+                    acc0 += acc[i];
+                }
+                LD[d_addr] += vreduce(acc0);
             }
         }
     }
