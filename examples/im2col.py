@@ -1,16 +1,19 @@
 # Copyright (C) 2025 Björn A. Lindqvist <bjourne@gmail.com>
 #
-# Incomplete example demonstrating im2col.
-from math import prod
+# WIP example demonstrating im2col.
+from math import ceil, prod
 from myopencl.objs import Context
 from numpy.lib.stride_tricks import as_strided
 from pathlib import Path
 from sys import argv
-from torch.nn.functional import conv2d, pad
+from torch.nn.functional import conv2d
 
 import myopencl as cl
 import numpy as np
 import torch
+
+def mean_rel_err(a, b):
+    return np.mean(np.abs(a - b) / (np.abs(b) + np.finfo(np.float32).eps))
 
 def format_build_opts(*args, **kw):
     defs = [f"-D {k}={v}" for (k, v) in kw.items()]
@@ -45,105 +48,6 @@ def untile_matrix(M):
     M = M.transpose(0, 2, 1, 3)
     return M.reshape(y * ts_y, x * ts_x)
 
-def matmul_ocl(a_mat, b_mat, plat_idx, path, pe_s, x_scale, v_size):
-    assert a_mat.dtype == np.float32 and b_mat.dtype == np.float32
-
-    a_block = pe_s ** 2, x_scale * v_size
-    b_block = a_block[1], a_block[0]
-    c_block = a_block[0], b_block[1]
-
-    a_size = a_mat.shape
-    b_size = b_mat.shape
-    c_size = a_size[0], b_size[1]
-
-    N = a_size[0] // a_block[0]
-    M = a_size[1] // a_block[1]
-    K = b_size[1] // b_block[1]
-
-    assert (N * a_block[0], M * a_block[1]) == a_size
-    assert (M * b_block[0], K * b_block[1]) == b_size
-    assert (N * c_block[0], K * c_block[1]) == c_size
-
-    kvs = [
-        ("PE_S", pe_s),
-        ("X_SCALE", x_scale),
-        ("V_SIZE", v_size),
-        ("Block A", dim_fmt(a_block)),
-        ("Block B", dim_fmt(b_block)),
-        ("Block C", dim_fmt(c_block)),
-        ("Size A", dim_fmt(a_size)),
-        ("Size B", dim_fmt(b_size)),
-        ("Size C", dim_fmt(c_size)),
-    ]
-    for k, v in kvs:
-        print("%-20s: %10s" % (k, v))
-
-
-    a_mat_tiled = tile_matrix(a_mat, a_block[0], a_block[1])
-    b_mat_t_tiled = tile_matrix(b_mat.T, b_block[1], b_block[0])
-    c_mat_cl = np.empty(c_size[0] * c_size[1], dtype = np.float32)
-
-    opts = format_build_opts(
-        "-cl-std=CL2.0", "-Werror",
-        PE_S = pe_s,
-        X_SCALE = x_scale,
-        V_SIZE = v_size
-    )
-    ctx = Context.from_indexes(plat_idx, 0)
-    ctx.register_program("matmul", path, opts)
-
-
-    dim_args = [(cl.cl_uint, M), (cl.cl_uint, N), (cl.cl_uint, K)]
-    kernel_configs = [
-        ("loadA", a_mat_tiled, cl.MemFlags.CL_MEM_READ_ONLY),
-        ("loadB", b_mat_t_tiled, cl.MemFlags.CL_MEM_READ_ONLY),
-        ("store", c_mat_cl, cl.MemFlags.CL_MEM_WRITE_ONLY)
-    ]
-
-    # Create buffers and queues and launch kernels
-    events = []
-    queue_props = [
-        cl.CommandQueueInfo.CL_QUEUE_PROPERTIES,
-        cl.CommandQueueProperties.CL_QUEUE_PROFILING_ENABLE
-    ]
-    for name, mat, flag in kernel_configs:
-        assert mat.dtype == np.float32
-        nbytes = mat.nbytes
-        ctx.register_buffer(name, nbytes, flag)
-        ctx.register_queue(name, queue_props)
-        if flag == cl.MemFlags.CL_MEM_READ_ONLY:
-            cptr = np.ctypeslib.as_ctypes(mat)
-            ctx.write_buffer(name, name, nbytes, cptr)
-        # Launch kernel
-        ev = ctx.run_kernel(
-            name, "matmul", name, [1], None, [name] + dim_args
-        )
-        events.append(ev)
-    cl.wait_for_events(events)
-
-    nbytes = c_mat_cl.nbytes
-    cptr = np.ctypeslib.as_ctypes(c_mat_cl)
-    ev = ctx.read_buffer("store", "store", nbytes, cptr)
-    cl.wait_for_events([ev])
-
-    c_mat_cl = c_mat_cl.reshape(-1, pe_s, pe_s)
-    c_mat_cl = c_mat_cl.transpose(0, 2, 1)
-    c_mat_cl = c_mat_cl.reshape(N, K, c_block[0], c_block[1])
-    c_mat_cl = untile_matrix(c_mat_cl)
-
-    attr_start = cl.ProfilingInfo.CL_PROFILING_COMMAND_START
-    attr_end = cl.ProfilingInfo.CL_PROFILING_COMMAND_END
-    for (name, mat, flag), ev in zip(kernel_configs, events):
-        start = cl.get_info(attr_start, ev)
-        end = cl.get_info(attr_end, ev)
-        secs = (end - start) * 1.0e-9
-        print("%-10s: %6.4f" % (name, secs))
-    ctx.finish_and_release()
-    return c_mat_cl
-
-def mean_rel_err(a, b):
-    return np.mean(np.abs(a - b) / (np.abs(b) + 0.0001))
-
 def im2col(X, W, padding):
     n_dim, iy_dim, ix_dim, ic_dim = X.shape
     fy_dim, fx_dim, ic_dim, oc_dim = W.shape
@@ -173,13 +77,128 @@ def im2col(X, W, padding):
         fy_dim * fx_dim * ic_dim
     )
     X = X.reshape(n_dim * oy_dim * ox_dim, fy_dim * fx_dim * ic_dim)
-
     W = W.reshape(fy_dim * fx_dim * ic_dim, oc_dim)
+    return X, W, (n_dim, oy_dim, ox_dim, oc_dim)
 
-    return X, W
+def matmul_cl(a_mat, b_mat, plat_idx, path, pe_s, x_scale, v_size):
+    assert a_mat.dtype == np.float32 and b_mat.dtype == np.float32
 
+    block_n = pe_s ** 2
+    block_m = x_scale * v_size
+    block_k = pe_s ** 2
 
-def im2col_ocl(
+    size_n, size_m = a_mat.shape
+    by, size_k = b_mat.shape
+    assert by == size_m
+
+    N = ceil(size_n / block_n)
+    M = ceil(size_m / block_m)
+    K = ceil(size_k / block_k)
+
+    # Flaw in the SA implementation
+    M = max(M, 3)
+
+    pad_n = N * block_n
+    pad_m = M * block_m
+    pad_k = K * block_k
+
+    add_n = pad_n - size_n
+    add_m = pad_m - size_m
+    add_k = pad_k - size_k
+
+    a_mat_pad = np.pad(a_mat, [(0, add_n), (0, add_m)])
+    b_mat_pad = np.pad(b_mat, [(0, add_m), (0, add_k)])
+
+    kvs = [
+        ("PE_S", pe_s),
+        ("X_SCALE", x_scale),
+        ("V_SIZE", v_size),
+        ("Block dims", "%4d %4d %4d" % (block_n, block_m, block_k)),
+        ("Matrix dims", "%4d %4d %4d" % (size_n, size_m, size_k)),
+        ("Padded dims", "%4d %4d %4d" % (pad_n, pad_m, pad_k)),
+    ]
+    for k, v in kvs:
+        print("%-20s: %15s" % (k, v))
+
+    a_mat_tiled = tile_matrix(a_mat_pad, block_n, block_m)
+    b_mat_t_tiled = tile_matrix(b_mat_pad.T, block_k, block_m)
+    c_mat = np.empty(pad_n * pad_k, dtype = np.float32)
+
+    opts = format_build_opts(
+        "-cl-std=CL2.0", "-Werror",
+        PE_S = pe_s,
+        X_SCALE = x_scale,
+        V_SIZE = v_size
+    )
+    ctx = Context.from_indexes(plat_idx, 0)
+    ctx.register_program("matmul", path, opts)
+
+    dim_args = [(cl.cl_uint, M), (cl.cl_uint, N), (cl.cl_uint, K)]
+    kernel_configs = [
+        ("loadA", a_mat_tiled, cl.MemFlags.CL_MEM_READ_ONLY),
+        ("loadB", b_mat_t_tiled, cl.MemFlags.CL_MEM_READ_ONLY),
+        ("store", c_mat, cl.MemFlags.CL_MEM_WRITE_ONLY)
+    ]
+
+    # Create buffers and queues and launch kernels
+    events = []
+    queue_props = [
+        cl.CommandQueueInfo.CL_QUEUE_PROPERTIES,
+        cl.CommandQueueProperties.CL_QUEUE_PROFILING_ENABLE
+    ]
+    for name, mat, flag in kernel_configs:
+        assert mat.dtype == np.float32
+        nbytes = mat.nbytes
+        ctx.register_buffer(name, nbytes, flag)
+        ctx.register_queue(name, queue_props)
+        if flag == cl.MemFlags.CL_MEM_READ_ONLY:
+            cptr = np.ctypeslib.as_ctypes(mat)
+            ctx.write_buffer(name, name, nbytes, cptr)
+        # Launch kernel
+        ev = ctx.run_kernel(
+            name, "matmul", name, [1], None, [name] + dim_args
+        )
+        events.append(ev)
+    cl.wait_for_events(events)
+
+    nbytes = c_mat.nbytes
+    cptr = np.ctypeslib.as_ctypes(c_mat)
+    ev = ctx.read_buffer("store", "store", nbytes, cptr)
+    cl.wait_for_events([ev])
+
+    c_mat = c_mat.reshape(-1, pe_s, pe_s)
+    c_mat = c_mat.transpose(0, 2, 1)
+    c_mat = c_mat.reshape(N, K, block_n, block_k)
+    c_mat = untile_matrix(c_mat)
+    c_mat = c_mat[:size_n,:size_k]
+
+    attr_start = cl.ProfilingInfo.CL_PROFILING_COMMAND_START
+    attr_end = cl.ProfilingInfo.CL_PROFILING_COMMAND_END
+    for (name, mat, flag), ev in zip(kernel_configs, events):
+        start = cl.get_info(attr_start, ev)
+        end = cl.get_info(attr_end, ev)
+        secs = (end - start) * 1.0e-9
+        print("%-10s: %6.4f" % (name, secs))
+    ctx.finish_and_release()
+    return c_mat
+
+def conv2d_cl(X, W, padding, plat_idx, path, pe_s, x_scale, v_size):
+    X, W, y_shape = im2col(X, W, padding)
+    Y = matmul_cl(X, W, plat_idx, path, pe_s, x_scale, v_size)
+    return Y.reshape(y_shape)
+
+# X: n, iy, ix, ic
+# W: fy, fx, ic, oc
+# Y: n, oy, ox, oc
+def conv2d_torch(X, W, padding):
+    _, _, _, oc_dim = W.shape
+    X = torch.from_numpy(X.transpose(0, 3, 1, 2))
+    W = torch.from_numpy(W.transpose(3, 2, 0, 1))
+    Y = conv2d(X, W, padding = padding)
+    Y = Y.numpy().transpose(0, 2, 3, 1)
+    return Y
+
+def im2col_cl(
         n_dim,
         oc_dim, ic_dim,
         fy_dim, fx_dim,
@@ -188,24 +207,23 @@ def im2col_ocl(
         plat_idx, path,
         pe_s, x_scale, v_size
 ):
-    X = init_arr(
+    X0 = init_arr(
         n_dim, iy_dim, ix_dim, ic_dim, mode = "default"
     )
-    W = init_arr(
+    W1 = init_arr(
         fy_dim, fx_dim, ic_dim, oc_dim, mode = "default"
     )
+    W2 = init_arr(
+        fy_dim, fx_dim, oc_dim, oc_dim, mode = "default"
+    )
 
-    Xp, Wp = im2col(X, W, padding)
+    X1_torch = conv2d_torch(X0, W1, padding)
+    X1_cl = conv2d_cl(X0, W1, padding, plat_idx, path, pe_s, x_scale, v_size)
+    print("X1: Rel. err torch, cl   : %.5f" % mean_rel_err(X1_torch, X1_cl))
 
-    X_torch = torch.from_numpy(X.transpose(0, 3, 1, 2))
-    W_torch = torch.from_numpy(W.transpose(3, 2, 0, 1))
-    Y_torch = conv2d(X_torch, W_torch, padding = padding)
-    Y_torch = Y_torch.numpy().transpose(0, 2, 3, 1)
-    Y_torch = Y_torch.reshape(-1, oc_dim)
-    Y = Xp @ Wp
-    Y_cl = matmul_ocl(Xp, Wp, plat_idx, path, pe_s, x_scale, v_size)
-    print("Rel. err Y, Y_cl   : %.2f" % mean_rel_err(Y, Y_cl))
-    print("Rel. err Y, Y_torch: %.2f" % mean_rel_err(Y, Y_torch))
+    X2_torch = conv2d_torch(X1_torch, W2, padding)
+    X2_cl = conv2d_cl(X1_cl, W2, padding, plat_idx, path, pe_s, x_scale, v_size)
+    print("X2: Rel. err torch, cl   : %.5f" % mean_rel_err(X2_torch, X2_cl))
 
 
 def main():
@@ -215,27 +233,14 @@ def main():
     pe_s = int(argv[4])
     x_scale = int(argv[5])
 
-    im2col_ocl(
+    im2col_cl(
         2,
-        256, 64,
+        32, 3,
         3, 3,
         16, 16,
         1,
         plat_idx, path,
         pe_s, x_scale, v_size
     )
-
-    # N, M, K = [int(v) for v in argv[6:9]]
-    # a_mat = init_arr(N, M)
-    # b_mat = init_arr(M, K)
-    # c_mat = a_mat @ b_mat
-
-    # c_mat_cl = matmul_ocl(
-    #     a_mat, b_mat,
-    #     plat_idx, path,
-    #     pe_s, x_scale, v_size
-    # )
-    # print(mean_rel_err(c_mat, c_mat_cl))
-
 
 main()
