@@ -52,6 +52,7 @@ class Context:
         self.queues[name] = q
 
     def register_buffer(self, name, nbytes, flags):
+        assert not name in self.buffers
         buf = cl.create_buffer(self.context, flags, nbytes)
         self.buffers[name] = buf
 
@@ -85,16 +86,16 @@ class Context:
 
 
     # IO
-    def write_buffer(self, qname, bname, nbytes, cptr):
+    def write_buffer(self, qname, bname, nbytes, ptr):
         buf = self.buffers[bname]
         q = self.queues[qname]
-        ev = cl.enqueue_write_buffer(q, buf, False, 0, nbytes, cptr)
+        ev = cl.enqueue_write_buffer(q, buf, False, 0, nbytes, ptr)
         return self.register_event(ev, name_event("w", qname, bname))
 
-    def read_buffer(self, qname, bname, nbytes, cptr):
+    def read_buffer(self, qname, bname, nbytes, ptr):
         q = self.queues[qname]
         buf = self.buffers[bname]
-        ev = cl.enqueue_read_buffer(q,  buf, False, 0, nbytes, cptr)
+        ev = cl.enqueue_read_buffer(q,  buf, False, 0, nbytes, ptr)
         return self.register_event(ev, name_event("r", qname, bname))
 
     # Release everything
