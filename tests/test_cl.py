@@ -3,7 +3,7 @@
 # Names:
 #   * bname - buffer name
 #   * c - Context
-#   * cptr - C pointer
+#   * ptr - C pointer
 #   * ev - event
 #   * ksize - kernel size
 #   * nbytes - number of bytes
@@ -72,6 +72,13 @@ def test_get_profiling_info(platform_id, device_id):
 
     for obj in [mem, queue, ctx, device_id]:
         cl.release(obj)
+
+@mark.parametrize("platform_id, device_id", PAIRS)
+def test_event_err(platform_id, device_id):
+    try:
+        cl.wait_for_events([None])
+    except cl.OpenCLError as e:
+        assert e.code == cl.ErrorCode.CL_INVALID_EVENT
 
 ########################################################################
 # Tests: higher level
