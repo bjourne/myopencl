@@ -1,23 +1,23 @@
 # Copyright (C) 2025 Björn A. Lindqvist <bjourne@gmail.com>
 #
 # This example implements VGG16 inference using OpenCL.
+from math import prod
 from myopencl.objs import Context
 from numpy.lib.stride_tricks import as_strided
 from pathlib import Path
 from sys import argv
 from time import time
+
 from torch import from_numpy, no_grad
+from torch import load as torch_load
 from torch.nn import *
+from torch.utils.data import DataLoader
+from torchvision.datasets import CIFAR10, CIFAR100
+from torchvision.transforms import Compose, Normalize, ToTensor
 
 import myopencl as cl
 import numpy as np
-
-np.set_printoptions(
-    precision=8,
-    linewidth=200,
-    threshold=5000,
-    suppress=True
-)
+import pickle
 
 ########################################################################
 # Torch code
@@ -48,6 +48,25 @@ def build_vgg_layers(n_cls):
     yield Linear(4096, 4096)
     yield ReLU(inplace = True)
     yield Linear(4096, n_cls)
+
+def load_cifar_test(data_dir, batch_size, n_cls):
+    norm = Normalize(
+        (0.4914, 0.4822, 0.4465),
+        (0.2023, 0.1994, 0.2010)
+    )
+    t_te = Compose([ToTensor(), norm])
+    cls = CIFAR10 if n_cls == 10 else CIFAR100
+    d_te = cls(data_dir, False, t_te, download = True)
+    l_te = DataLoader(d_te, batch_size, True, drop_last = True)
+    if n_cls == 10:
+        names = []
+    else:
+        meta = data_dir / 'cifar-100-python' / 'meta'
+        with open(meta, 'rb') as f:
+            d = pickle.load(f)
+            names = d['fine_label_names']
+
+    return l_te, names
 
 
 ########################################################################
@@ -172,6 +191,12 @@ def write_np_arr(ctx, name, x):
     nbytes = x.nbytes
     return ctx.write_buffer("main", name, nbytes, ptr)
 
+def create_and_write_np_arr(ctx, name, x):
+    ro_flag = cl.MemFlags.CL_MEM_READ_ONLY
+    ctx.register_buffer(name, x.nbytes, ro_flag)
+    write_np_arr(ctx, name, x)
+
+
 def read_np_arr(ctx, name, x):
     ptr = np.ctypeslib.as_ctypes(x)
     ev = ctx.read_buffer("main", name, x.nbytes, ptr)
@@ -184,78 +209,62 @@ def run_kernel(ctx, name, bufs, uints):
 ########################################################################
 # OpenCL layer handling
 ########################################################################
-def cl_batch_norm2d(ctx, l, x):
-    ps = l.running_mean, l.running_var, l.weight, l.bias
 
-    write_np_arr(ctx, "x", x)
-    param_bufs = ["w0", "w1", "w2", "w3"]
-    for name, p in zip(param_bufs, ps):
-        write_np_arr(ctx, name, p.numpy())
+# Converts params to NumPy. Every layer has type, scalar params, and
+# buffer params.
+def torch_to_cl_net(net, x_shape):
+    layers = []
+    for m in net.modules():
+        tp = type(m)
+        if tp == BatchNorm2d:
+            buffers = m.running_mean, m.running_var, m.weight, m.bias
+            buffers = [b.numpy() for b in buffers]
+            next_shape = x_shape
+            layers.append(("batch_norm2d", x_shape, buffers))
+        elif tp == Conv2d:
+            assert not m.bias
+            w = m.weight.numpy()
+            w = w.transpose(2, 3, 1, 0)
+            w = np.ascontiguousarray(w)
 
-    run_kernel(
-        ctx,
-        "batch_norm2d",
-        ["x", "y"] + param_bufs,
-        x.shape
-    )
-    y = np.empty_like(x)
-    read_np_arr(ctx, "y", y)
-    return y
+            pad = m.padding[0]
+            n_dim, iy_dim, ix_dim, ic_dim = x_shape
+            fy_dim, fx_dim, ic_dim, oc_dim = w.shape
+            oy_dim = iy_dim + 2 * pad - fy_dim + 1
+            ox_dim = ix_dim + 2 * pad - fx_dim + 1
 
-def cl_conv2d(ctx, l, x):
-    assert not l.bias
-    assert l.padding == (1, 1)
-    w = l.weight.numpy()
-    w = w.transpose(2, 3, 1, 0)
-    x, w, y_shape = im2col(x, w, 1)
-
-    n_dim, m_dim = x.shape
-    _, k_dim = w.shape
-
-    y = np.empty((n_dim, k_dim), dtype = np.float32)
-    write_np_arr(ctx, "x", x)
-    write_np_arr(ctx, "w0", w)
-    run_kernel(ctx, "conv2d", ["x", "y", "w0"], [n_dim, m_dim, k_dim])
-    read_np_arr(ctx, "y", y)
-    return y.reshape(y_shape)
-
-def cl_flatten(ctx, l, x):
-    return x.reshape(x.shape[0], -1)
-
-def cl_linear(ctx, l, x):
-    w = l.weight.numpy()
-    b = l.bias.numpy()
-    n_dim, m_dim = x.shape
-    k_dim = w.shape[0]
-
-    y = np.empty((n_dim, k_dim), dtype = np.float32)
-    write_np_arr(ctx, "x", x)
-    write_np_arr(ctx, "w0", w)
-    write_np_arr(ctx, "w1", b)
-    run_kernel(ctx, "linear", ["x", "y", "w0", "w1"], [n_dim, m_dim, k_dim])
-    read_np_arr(ctx, "y", y)
-    return y
-
-def cl_max_pool2d(ctx, l, x):
-    write_np_arr(ctx, "x", x)
-    n_dim, y_dim, x_dim, c_dim = x.shape
-    run_kernel(ctx, "max_pool2d", ["x", "y"], [n_dim, y_dim, x_dim, c_dim, 2])
-    y = np.empty((n_dim, y_dim // 2, x_dim // 2, c_dim),
-                 dtype = np.float32)
-    read_np_arr(ctx, "y", y)
-    return y
-
-def cl_relu(ctx, l, x):
-    write_np_arr(ctx, "x", x)
-    run_kernel(
-        ctx,
-        "relu",
-        ["x", "y"],
-        [x.size]
-    )
-    y = np.empty_like(x)
-    read_np_arr(ctx, "y", y)
-    return y
+            scalars = [
+                n_dim,
+                iy_dim, ix_dim,
+                fy_dim, fx_dim,
+                ic_dim, oc_dim,
+                pad
+            ]
+            layers.append(("conv2d", scalars, [w]))
+            next_shape = [n_dim, oy_dim, ox_dim, oc_dim]
+        elif tp == Flatten:
+            n_dim, iy_dim, ix_dim, ic_dim = x_shape
+            next_shape = n_dim, iy_dim * ix_dim * ic_dim
+        elif tp == Linear:
+            w = m.weight.numpy()
+            b = m.bias.numpy()
+            mat_n, mat_m = x_shape
+            mat_k, _ = w.shape
+            layers.append(("linear", [mat_n, mat_m, mat_k], [w, b]))
+            next_shape = mat_n, mat_k
+        elif tp == MaxPool2d:
+            layers.append(("max_pool2d", list(x_shape) + [2], []))
+            n_dim, iy_dim, ix_dim, ic_dim = x_shape
+            next_shape = n_dim, iy_dim // 2, ix_dim // 2, ic_dim
+        elif tp == ReLU:
+            layers.append(("relu", [prod(x_shape)], []))
+            next_shape = x_shape
+        elif tp == Sequential:
+            continue
+        else:
+            assert False
+        x_shape = next_shape
+    return layers, x_shape
 
 def cl_run(net, x, path, plat_idx):
     opts = format_build_opts(
@@ -267,56 +276,104 @@ def cl_run(net, x, path, plat_idx):
 
     ctx = Context.from_indexes(plat_idx, 0)
     ctx.register_program("main", path, opts)
-    ctx.register_queue("main", [])
 
-    buf_size = 256 * 1024**2
+
+    props = [
+        cl.CommandQueueInfo.CL_QUEUE_PROPERTIES,
+        cl.CommandQueueProperties.CL_QUEUE_PROFILING_ENABLE
+    ]
+    ctx.register_queue("main", props)
+
+    buf_size = 128 * 1024**2
 
     rw_flag = cl.MemFlags.CL_MEM_READ_WRITE
     ro_flag = cl.MemFlags.CL_MEM_READ_ONLY
     ctx.register_buffer("x", buf_size, rw_flag)
+    ctx.register_buffer("tmp", buf_size, rw_flag)
     ctx.register_buffer("y", buf_size, rw_flag)
-    ctx.register_buffer("w0", buf_size, ro_flag)
-    ctx.register_buffer("w1", buf_size, ro_flag)
-    ctx.register_buffer("w2", buf_size, ro_flag)
-    ctx.register_buffer("w3", buf_size, ro_flag)
-    handlers = {
-        MaxPool2d : cl_max_pool2d,
-        BatchNorm2d : cl_batch_norm2d,
-        Conv2d : cl_conv2d,
-        Flatten : cl_flatten,
-        Linear : cl_linear,
-        ReLU : cl_relu
-    }
-    for mod in net.modules():
-        assert x.dtype == np.float32
-        if isinstance(mod, Sequential):
-            continue
-        tp = type(mod)
-        x = handlers[tp](ctx, mod, x)
 
+    cl_net, y_shape = torch_to_cl_net(net, list(x.shape))
+
+    for i, (tp, scalars, buffers) in enumerate(cl_net):
+        for j, buf in enumerate(buffers):
+            create_and_write_np_arr(ctx, (i, j), buf)
+
+    # Write initial input
+    write_np_arr(ctx, "x", x)
+    src, dst = "x", "y"
+
+    events = []
+
+    bef = time()
+    for i, (tp, scalars, param_bufs) in enumerate(cl_net):
+        bufs = [src, dst]
+        if tp == "conv2d":
+            bufs = [src, "tmp", dst]
+        bufs += [(i, j) for j in range(len(param_bufs))]
+        ev = run_kernel(
+            ctx,
+            tp,
+            bufs,
+            scalars
+        )
+        src, dst = dst, src
+        name = "%3d %-15s %-33s" % (i, tp, scalars)
+        events.append((name, ev))
+
+    y = np.empty(y_shape, dtype = np.float32)
+    read_np_arr(ctx, "y", y)
+    took = time() - bef
+
+    attr_start = cl.ProfilingInfo.CL_PROFILING_COMMAND_START
+    attr_end = cl.ProfilingInfo.CL_PROFILING_COMMAND_END
+    for name, ev in events:
+        start = cl.get_info(attr_start, ev)
+        end = cl.get_info(attr_end, ev)
+        secs = (end - start) * 1.0e-9
+        print("%-54s: %8.4f" % (name, secs))
+    print("%-54s: %8.4f" % ("total", took))
+    print()
     ctx.finish_and_release()
-    return x
+    return y
+
+N_CLS = 100
 
 def main():
-    n_dim, y_dim, x_dim, c_dim = 64, 32, 32, 3
+    # Load one batch
+    l_te, names = load_cifar_test(Path("/tmp/data"), 16, N_CLS)
+    x, y_real = next(iter(l_te))
 
-    net = Sequential(*build_vgg_layers(10))
+    x = x.numpy().transpose(0, 2, 3, 1)
+    x = np.ascontiguousarray(x)
+
+    # Build model
+
+    net = Sequential(*build_vgg_layers(N_CLS))
     path = Path(argv[1])
     plat_idx = int(argv[2])
 
-    x = np.random.rand(n_dim, y_dim, x_dim, c_dim).astype(np.float32)
+    if len(argv) == 4:
+        d = torch_load(argv[3], weights_only = True)
+        d2 = {}
+        for k, v in d.items():
+            d2[k[len("features."):]] = v
+        net.load_state_dict(d2)
+
     with no_grad():
         # Train batch norm layers
         torch_run(net, x)
         net.eval()
         y_torch = torch_run(net, x)
         y_np = np_run(net, x)
-        bef = time()
         y_cl = cl_run(net, x, path, plat_idx)
-        print("CL time", time() - bef)
 
     assert y_torch.shape == y_np.shape
     assert y_torch.dtype == y_np.dtype
+
+    print(y_torch.argmax(axis = 1))
+    print(y_cl.argmax(axis = 1))
+    print(y_np.argmax(axis = 1))
+    print(y_real)
 
     diff = np.abs(y_cl - y_torch)
     print(np.max(diff), np.mean(diff))
