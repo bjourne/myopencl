@@ -3,7 +3,6 @@
 # This example implements VGG16 inference using OpenCL.
 from math import prod
 from myopencl.objs import Context
-from numpy.lib.stride_tricks import as_strided
 from pathlib import Path
 from sys import argv
 from time import time
@@ -65,56 +64,9 @@ def load_cifar_test(data_dir, batch_size, n_cls):
         with open(meta, 'rb') as f:
             d = pickle.load(f)
             names = d['fine_label_names']
-
     return l_te, names
 
 
-########################################################################
-# NumPy code
-########################################################################
-def tile(x, win, step, axis):
-    step = np.array(step)
-    axis = np.array(axis)
-    shape = np.array(x.shape)
-    strides = np.array(x.strides)
-
-    assert len(win) == len(step) == len(axis)
-    assert len(win) <= len(shape)
-
-    new_strides = np.concatenate((
-        strides[:axis[0]],
-        strides[axis] * step,
-        strides[axis],
-        strides[axis[-1] + 1:]
-    ))
-
-    n_wins = (shape[axis] - win) // step + 1
-    new_shape = np.concatenate((
-        shape[:axis[0]],
-        n_wins,
-        win,
-        shape[axis[-1] + 1:]
-    ))
-    return as_strided(x, new_shape, new_strides)
-
-def im2col(X, W, pad):
-    n, iy, ix, ic = X.shape
-    fy, fx, ic, oc = W.shape
-
-    X = np.pad(X, [(0, 0), (pad, pad), (pad, pad), (0, 0)])
-    X = tile(X, (fy, fx), (1, 1), (1, 2))
-
-    # Destination size
-    oy = iy + 2 * pad - fy + 1
-    ox = ix + 2 * pad - fx + 1
-
-    X = X.reshape(-1, fy * fx * ic)
-    W = W.reshape(-1, oc)
-    return X, W, (n, oy, ox, oc)
-
-########################################################################
-# Torch runner
-########################################################################
 def torch_run(net, x):
     # Torch wants (N, C, Y, X) tensors
     if len(x.shape) == 4:
@@ -126,55 +78,6 @@ def torch_run(net, x):
         y = y.transpose(0, 2, 3, 1)
     return y
 
-########################################################################
-# NumPy runner
-########################################################################
-def np_batch_norm2d(l, x):
-    ps = l.running_mean, l.running_var, l.weight, l.bias
-    ps = [p.numpy().reshape(1, 1, 1, -1) for p in ps]
-    m, v, w, b = ps
-    return w * (x - m) / np.sqrt(v + 1e-5) + b
-
-def np_conv2d(l, x):
-    assert not l.bias
-    assert l.padding == (1, 1)
-    w = l.weight.numpy()
-    w = w.transpose(2, 3, 1, 0)
-    x, w, y_shape = im2col(x, w, 1)
-    y = x @ w
-    return y.reshape(y_shape)
-
-def np_flatten(l, x):
-    return x.reshape(x.shape[0], -1)
-
-def np_linear(l, x):
-    w = l.weight.numpy()
-    b = l.bias.numpy()
-    return x @ w.T + b
-
-def np_max_pool2d(l, x):
-    wins = tile(x, (2, 2), (2, 2), (1, 2))
-    return wins.max(axis = (3, 4))
-
-def np_relu(l, x):
-    x[x < 0] = 0
-    return x
-
-def np_run(net, x):
-    handlers = {
-        MaxPool2d : np_max_pool2d,
-        BatchNorm2d : np_batch_norm2d,
-        Conv2d : np_conv2d,
-        Flatten : np_flatten,
-        Linear : np_linear,
-        ReLU : np_relu
-    }
-    for mod in net.modules():
-        if isinstance(mod, Sequential):
-            continue
-        tp = type(mod)
-        x = handlers[tp](mod, x)
-    return x
 
 ########################################################################
 # OpenCL utility
@@ -195,7 +98,6 @@ def create_and_write_np_arr(ctx, name, x):
     ro_flag = cl.MemFlags.CL_MEM_READ_ONLY
     ctx.register_buffer(name, x.nbytes, ro_flag)
     write_np_arr(ctx, name, x)
-
 
 def read_np_arr(ctx, name, x):
     ptr = np.ctypeslib.as_ctypes(x)
@@ -273,11 +175,8 @@ def cl_run(net, x, path, plat_idx):
         "-cl-fast-relaxed-math",
         "-cl-mad-enable"
     )
-
     ctx = Context.from_indexes(plat_idx, 0)
     ctx.register_program("main", path, opts)
-
-
     props = [
         cl.CommandQueueInfo.CL_QUEUE_PROPERTIES,
         cl.CommandQueueProperties.CL_QUEUE_PROFILING_ENABLE
@@ -285,9 +184,7 @@ def cl_run(net, x, path, plat_idx):
     ctx.register_queue("main", props)
 
     buf_size = 128 * 1024**2
-
     rw_flag = cl.MemFlags.CL_MEM_READ_WRITE
-    ro_flag = cl.MemFlags.CL_MEM_READ_ONLY
     ctx.register_buffer("x", buf_size, rw_flag)
     ctx.register_buffer("tmp", buf_size, rw_flag)
     ctx.register_buffer("y", buf_size, rw_flag)
@@ -308,14 +205,10 @@ def cl_run(net, x, path, plat_idx):
     for i, (tp, scalars, param_bufs) in enumerate(cl_net):
         bufs = [src, dst]
         if tp == "conv2d":
+            # Need this for im2col transformation.
             bufs = [src, "tmp", dst]
         bufs += [(i, j) for j in range(len(param_bufs))]
-        ev = run_kernel(
-            ctx,
-            tp,
-            bufs,
-            scalars
-        )
+        ev = run_kernel(ctx, tp, bufs, scalars)
         src, dst = dst, src
         name = "%3d %-15s %-33s" % (i, tp, scalars)
         events.append((name, ev))
@@ -347,7 +240,6 @@ def main():
     x = np.ascontiguousarray(x)
 
     # Build model
-
     net = Sequential(*build_vgg_layers(N_CLS))
     path = Path(argv[1])
     plat_idx = int(argv[2])
@@ -364,19 +256,15 @@ def main():
         torch_run(net, x)
         net.eval()
         y_torch = torch_run(net, x)
-        y_np = np_run(net, x)
         y_cl = cl_run(net, x, path, plat_idx)
 
-    assert y_torch.shape == y_np.shape
-    assert y_torch.dtype == y_np.dtype
-
+    assert y_torch.dtype == y_cl.dtype
     print(y_torch.argmax(axis = 1))
     print(y_cl.argmax(axis = 1))
-    print(y_np.argmax(axis = 1))
     print(y_real)
 
     diff = np.abs(y_cl - y_torch)
     print(np.max(diff), np.mean(diff))
-    print("Normed err: ", np.linalg.norm(y_np - y_torch))
+    print("Normed err: ", np.linalg.norm(y_cl - y_torch))
 
 main()
