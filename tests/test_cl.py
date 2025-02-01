@@ -80,6 +80,18 @@ def test_event_err(platform_id, device_id):
     except cl.OpenCLError as e:
         assert e.code == cl.ErrorCode.CL_INVALID_EVENT
 
+@mark.parametrize("platform_id, device_id", PAIRS)
+def test_invalid_binary(platform_id, device_id):
+    ctx = cl.create_context(device_id)
+
+    b = bytes([1, 2, 3, 4])
+    try:
+        cl.create_program_with_binary(ctx, device_id, b)
+    except cl.OpenCLError as e:
+        assert e.code == cl.ErrorCode.CL_INVALID_BINARY
+
+    cl.release(ctx)
+
 ########################################################################
 # Tests: higher level
 ########################################################################
