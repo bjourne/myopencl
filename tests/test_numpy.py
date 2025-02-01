@@ -351,3 +351,15 @@ def test_im2col(platform_id, device_id):
         assert err < 0.01
         assert np.array_equal(Y_out, Y_exp)
     ctx.finish_and_release()
+
+# Buffer names does not have to be strings
+@mark.parametrize("platform_id,device_id", PAIRS)
+def test_buffer_names(platform_id, device_id):
+    c = Context(platform_id, device_id)
+    x = np.zeros((10, 10))
+    c.register_buffer((1, 2), x.nbytes, cl.MemFlags.CL_MEM_READ_ONLY)
+    c.register_queue("main", [])
+    ptr = np.ctypeslib.as_ctypes(x)
+    c.write_buffer("main", (1, 2), x.nbytes, ptr)
+
+    c.finish_and_release()

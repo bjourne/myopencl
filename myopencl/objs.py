@@ -2,7 +2,7 @@
 
 # Names:
 #   * c - Context
-#   * cptr - C pointer
+#   * ptr - C pointer
 #   * bname - buffer name
 #   * qname - queue name
 #   * gl_work, lo_work - Global and local work
@@ -22,7 +22,7 @@ def pp_dict_with_header(header, wrap, d):
 EVENT_CNT = 0
 def name_event(*args):
     global EVENT_CNT
-    pf = ":".join(args)
+    pf = ":".join(str(a) for a in args)
     s = f"{pf}-{EVENT_CNT:03d}"
     EVENT_CNT += 1
     return s
@@ -80,8 +80,8 @@ class Context:
         cl.build_program(prog, dev_id, opts, True, True)
         self.programs[pname] = prog
 
-        kernels = {n : cl.create_kernel(prog, n)
-                   for n in cl.get_kernel_names(prog)}
+        names = cl.get_kernel_names(prog)
+        kernels = {n : cl.create_kernel(prog, n) for n in names}
         self.kernels[pname] = kernels
 
 
@@ -136,9 +136,8 @@ class Context:
     def set_kernel_args(self, pname, kname, args):
         kern = self.kernels[pname][kname]
         for i, arg in enumerate(args):
-            if type(arg) == str:
-                val = self.buffers[arg]
-            else:
+            val = self.buffers.get(arg)
+            if val is None:
                 ctype, pyval = arg
                 val = ctype(pyval)
             cl.set_kernel_arg(kern, i, val)
