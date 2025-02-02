@@ -126,12 +126,13 @@ def torch_to_cl_net(net, x_shape):
         elif tp == Conv2d:
             assert not m.bias
             w = m.weight.numpy()
-            w = w.transpose(2, 3, 1, 0)
-            w = np.ascontiguousarray(w)
+            oc_dim, ic_dim, fy_dim, fx_dim = w.shape
+
+            # oc, fy, fx, ic
+            w_t = np.ascontiguousarray(w.transpose(0, 2, 3, 1))
 
             pad = m.padding[0]
             n_dim, iy_dim, ix_dim, ic_dim = x_shape
-            fy_dim, fx_dim, ic_dim, oc_dim = w.shape
             oy_dim = iy_dim + 2 * pad - fy_dim + 1
             ox_dim = ix_dim + 2 * pad - fx_dim + 1
 
@@ -142,7 +143,7 @@ def torch_to_cl_net(net, x_shape):
                 ic_dim, oc_dim,
                 pad
             ]
-            layers.append(("conv2d", scalars, [w]))
+            layers.append(("conv2d", scalars, [w_t]))
             next_shape = [n_dim, oy_dim, ox_dim, oc_dim]
         elif tp == Flatten:
             n_dim, iy_dim, ix_dim, ic_dim = x_shape
@@ -191,7 +192,7 @@ def cl_run(net, x, path, plat_idx):
 
     cl_net, y_shape = torch_to_cl_net(net, list(x.shape))
 
-    for i, (tp, scalars, buffers) in enumerate(cl_net):
+    for i, (_, _, buffers) in enumerate(cl_net):
         for j, buf in enumerate(buffers):
             create_and_write_np_arr(ctx, (i, j), buf)
 
