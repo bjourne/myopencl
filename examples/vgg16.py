@@ -3,6 +3,7 @@
 # This example implements VGG16 inference using OpenCL.
 from math import ceil, prod
 from myopencl.objs import Context
+from numpy.lib.stride_tricks import as_strided
 from pathlib import Path
 from sys import argv
 from time import time
@@ -17,6 +18,7 @@ from torchvision.transforms import Compose, Normalize, ToTensor
 import myopencl as cl
 import numpy as np
 import pickle
+import torch
 
 V_SIZE = 8
 PE_S = 8
@@ -26,6 +28,41 @@ X_SCALE = 8
 BLOCK_N = PE_S ** 2
 BLOCK_M = X_SCALE * V_SIZE
 BLOCK_K = PE_S ** 2
+
+########################################################################
+# NumPy code
+########################################################################
+def tile(x, win, step, axis):
+    assert x.flags["C_CONTIGUOUS"]
+    assert x.data.contiguous
+
+    step = np.array(step)
+    axis = np.array(axis)
+    shape = np.array(x.shape)
+    strides = np.array(x.strides)
+
+    assert len(win) == len(step) == len(axis)
+    assert len(win) <= len(shape)
+
+    new_strides = np.concatenate((
+    strides[:axis[0]],
+        strides[axis] * step,
+        strides[axis],
+        strides[axis[-1] + 1:]
+    ))
+
+    n_wins = (shape[axis] - win) // step + 1
+    new_shape = np.concatenate((
+        shape[:axis[0]],
+        n_wins,
+        win,
+        shape[axis[-1] + 1:]
+    ))
+    return as_strided(x, new_shape, new_strides)
+
+def tile_matrix(mat, ts_y, ts_x):
+    return tile(mat, (ts_y, ts_x), (ts_y, ts_x), (0, 1))
+
 
 ########################################################################
 # Torch code
@@ -117,23 +154,26 @@ def run_kernel(ctx, name, bufs, uints):
     params = bufs + [(cl.cl_uint, i) for i in uints]
     return ctx.run_kernel("main", "main", name, [1], None, params)
 
+def run_sd_kernel(ctx, qname, kname, params):
+    params = [(cl.cl_uint, p) if type(p) == int else p
+              for p in params]
+    return ctx.run_kernel(qname, "main", kname, [1], None, params)
+
 ########################################################################
 # OpenCL layer handling
 ########################################################################
-
 def conv2d_to_cl(mod, x_shape):
     assert not mod.bias
     w = mod.weight.numpy()
     oc_dim, ic_dim, fy_dim, fx_dim = w.shape
 
     # oc, fy, fx, ic
-    w_t = np.ascontiguousarray(w.transpose(0, 2, 3, 1))
     pad = mod.padding[0]
     n_dim, iy_dim, ix_dim, ic_dim = x_shape
     oy_dim = iy_dim + 2 * pad - fy_dim + 1
     ox_dim = ix_dim + 2 * pad - fx_dim + 1
 
-    layers = []
+    tasks = []
     args = [
         n_dim,
         iy_dim, ix_dim,
@@ -141,14 +181,66 @@ def conv2d_to_cl(mod, x_shape):
         ic_dim, oc_dim,
         pad
     ]
-    layers.append(("conv2d_im2col", args, []))
+    tasks.append(("conv2d_im2col", args, []))
 
-    mat_n = n_dim * oy_dim * ox_dim
-    mat_m = fy_dim * fx_dim * ic_dim
-    mat_k = oc_dim
-    args = [mat_n, mat_m, mat_k]
-    layers.append(("conv2d_matmul", args, [w_t]))
-    return layers, [n_dim, oy_dim, ox_dim, oc_dim]
+    size_n = n_dim * oy_dim * ox_dim
+    size_m = fy_dim * fx_dim * ic_dim
+    size_k = oc_dim
+
+    w_t = np.ascontiguousarray(w.transpose(0, 2, 3, 1))
+
+    args = [size_n, size_m, size_k]
+    tasks.append(("conv2d_matmul", args, [w_t]))
+    return tasks, [n_dim, oy_dim, ox_dim, oc_dim]
+
+def conv2d_to_cl2(mod, x_shape):
+    assert not mod.bias
+    w = mod.weight.numpy()
+    oc_dim, ic_dim, fy_dim, fx_dim = w.shape
+
+    # oc, fy, fx, ic
+    pad = mod.padding[0]
+    n_dim, iy_dim, ix_dim, ic_dim = x_shape
+    oy_dim = iy_dim + 2 * pad - fy_dim + 1
+    ox_dim = ix_dim + 2 * pad - fx_dim + 1
+
+    tasks = []
+    args = [
+        n_dim,
+        iy_dim, ix_dim,
+        fy_dim, fx_dim,
+        ic_dim, oc_dim,
+        pad
+    ]
+    tasks.append(("conv2d_im2col", args, []))
+
+    size_n = n_dim * oy_dim * ox_dim
+    size_m = fy_dim * fx_dim * ic_dim
+    size_k = oc_dim
+
+    n_blocks = ceil(size_n / BLOCK_N)
+    m_blocks = max(ceil(size_m / BLOCK_M), 3)
+    k_blocks = ceil(size_k / BLOCK_K)
+
+    pad_n = n_blocks * BLOCK_N
+    pad_m = m_blocks * BLOCK_M
+    pad_k = k_blocks * BLOCK_K
+
+    add_n = pad_n - size_n
+    add_m = pad_m - size_m
+    add_k = pad_k - size_k
+
+    tasks.append(("preproc_a", [size_n, size_m, n_blocks, m_blocks], []))
+
+    # After this transform, w is transposed!
+    w_t = np.ascontiguousarray(w.transpose(0, 2, 3, 1))
+    w_t = w_t.reshape((size_k, size_m))
+    w_t_pad = np.pad(w_t, [(0, add_k), (0, add_m)])
+    w_t_pad_tiled = np.ascontiguousarray(tile_matrix(w_t_pad, BLOCK_K, BLOCK_M))
+
+    tasks.append(("sa_matmul", [n_blocks, m_blocks, k_blocks], [w_t_pad_tiled]))
+    tasks.append(("postproc_c", [size_n, size_k, n_blocks, k_blocks], []))
+    return tasks, [n_dim, oy_dim, ox_dim, oc_dim]
 
 def get_padded_dims(n, m, k):
     n_blocks = ceil(n / BLOCK_N)
@@ -172,14 +264,52 @@ def linear_to_cl(mod, x_shape):
     pad_n, pad_m, pad_k = get_padded_dims(mat_n, mat_m, mat_k)
 
     w = np.pad(w, [(0, pad_k - mat_k), (0, pad_m - mat_m)])
-    b = np.pad(b, [(0, pad_k - mat_k)])
 
     layers = [
         ("linear_pad", [mat_n, mat_m, pad_n, pad_m], []),
-        ("linear", [pad_n, pad_m, pad_k], [w, b]),
-        ("linear_unpad", [pad_n, pad_k, mat_n, mat_k], [])
+        ("linear_matmul", [pad_n, pad_m, pad_k], [w]),
+        ("linear_unpad", [pad_n, pad_k, mat_n, mat_k], []),
+        ("linear_bias", [mat_n, mat_k], [b])
     ]
     return layers, [mat_n, mat_k]
+
+def linear_to_cl2(mod, x_shape):
+    w = mod.weight.numpy()
+    b = mod.bias.numpy()
+
+    size_n, size_m = x_shape
+    size_k, by = w.shape
+    assert by == size_m
+    assert len(b) == size_k
+
+    n_blocks = ceil(size_n / BLOCK_N)
+    m_blocks = max(ceil(size_m / BLOCK_M), 3)
+    k_blocks = ceil(size_k / BLOCK_K)
+
+    pad_n = n_blocks * BLOCK_N
+    pad_m = m_blocks * BLOCK_M
+    pad_k = k_blocks * BLOCK_K
+
+    add_n = pad_n - size_n
+    add_m = pad_m - size_m
+    add_k = pad_k - size_k
+
+    w_pad = np.pad(w, [(0, add_k), (0, add_m)])
+    w_pad_tiled = np.ascontiguousarray(tile_matrix(w_pad, BLOCK_K, BLOCK_M))
+    #print(w_pad_tiled)
+
+    assert w_pad_tiled.dtype == np.float32
+
+    # w = np.ascontiguousarray(tile_matrix(w, size_k, size_m))
+    # assert w.dtype == np.float32
+    tasks = [
+        ("preproc_a", [size_n, size_m, n_blocks, m_blocks], []),
+        ("sa_matmul", [n_blocks, m_blocks, k_blocks], [w_pad_tiled]),
+        ("postproc_c", [size_n, size_k, n_blocks, k_blocks], []),
+        ("linear_bias", [size_n, size_k], [b])
+    ]
+    return tasks, [size_n, size_k]
+
 
 def batch_norm2d_to_cl(mod, x_shape):
     buffers = mod.running_mean, mod.running_var, mod.weight, mod.bias
@@ -200,12 +330,12 @@ def torch_to_cl_net(net, x_shape):
             tasks2, y_shape = batch_norm2d_to_cl(m, x_shape)
             tasks.extend(tasks2)
         elif tp == Conv2d:
-            tasks2, y_shape = conv2d_to_cl(m, x_shape)
+            tasks2, y_shape = conv2d_to_cl2(m, x_shape)
             tasks.extend(tasks2)
         elif tp == Flatten:
             y_shape = x_shape[0], prod(x_shape[1:])
         elif tp == Linear:
-            tasks2, y_shape = linear_to_cl(m, x_shape)
+            tasks2, y_shape = linear_to_cl2(m, x_shape)
             tasks.extend(tasks2)
         elif tp == MaxPool2d:
             tasks.append(("max_pool2d", list(x_shape) + [2], []))
@@ -224,9 +354,14 @@ def torch_to_cl_net(net, x_shape):
 def cl_run(cl_net, y_shape, x, path, plat_idx):
     opts = format_build_opts(
         "-cl-std=CL2.0",
-        "-Werror",
         "-cl-fast-relaxed-math",
-        "-cl-mad-enable"
+        "-cl-mad-enable",
+        "-Werror",
+        INCLUDE_PP = 1,
+        TYPE_SEL = 2,
+        PE_S = PE_S,
+        X_SCALE = X_SCALE,
+        V_SIZE = V_SIZE
     )
     ctx = Context.from_indexes(plat_idx, 0)
     ctx.register_program("main", path, opts)
@@ -235,8 +370,10 @@ def cl_run(cl_net, y_shape, x, path, plat_idx):
         cl.CommandQueueProperties.CL_QUEUE_PROFILING_ENABLE
     ]
     ctx.register_queue("main", props)
+    ctx.register_queue("aux1", props)
+    ctx.register_queue("aux2", props)
 
-    buf_size = 128 * 1024**2
+    buf_size = 256 * 1024**2
     rw_flag = cl.MemFlags.CL_MEM_READ_WRITE
     ctx.register_buffer("x", buf_size, rw_flag)
     ctx.register_buffer("y", buf_size, rw_flag)
@@ -252,10 +389,19 @@ def cl_run(cl_net, y_shape, x, path, plat_idx):
     events = []
     bef = time()
     for i, (tp, scalars, param_bufs) in enumerate(cl_net):
-        bufs = [src, dst] + [(i, j) for j in range(len(param_bufs))]
-        ev = run_kernel(ctx, tp, bufs, scalars)
+        param_buf_ids = [(i, j) for j in range(len(param_bufs))]
+        if tp == "sa_matmul":
+            n_blocks, m_blocks, k_blocks = scalars
+            w = param_buf_ids[0]
+            ev1 = run_sd_kernel(ctx, "main", "load_a", [src, n_blocks, m_blocks, k_blocks])
+            ev2 = run_sd_kernel(ctx, "aux1", "load_b", [w, n_blocks, m_blocks, k_blocks])
+            ev3 = run_sd_kernel(ctx, "aux2", "store", [dst, n_blocks, m_blocks, k_blocks])
+            cl.wait_for_events([ev1, ev2, ev3])
+            ev = ev3
+        else:
+            bufs = [src, dst] + param_buf_ids
+            ev = run_kernel(ctx, tp, bufs, scalars)
         name = "%3d %-15s %-33s" % (i, tp, scalars)
-        cl.wait_for_events([ev])
         events.append((name, ev))
         src, dst = dst, src
 
@@ -277,32 +423,45 @@ def cl_run(cl_net, y_shape, x, path, plat_idx):
 
 N_CLS = 100
 
+
+def create_linear_net():
+    net = Sequential(Linear(16, 32))
+    x = np.arange(8 * 16).reshape(8, 16).astype(np.float32)
+    return net, x
+
+def create_conv2d_net():
+    n_dim = 1
+    ic_dim, oc_dim = 4, 8
+    iy_dim, ix_dim = 32, 32
+    net = Sequential(
+        Conv2d(ic_dim, oc_dim, 3, padding = 1, bias = False)
+    )
+    x = np.arange(n_dim * iy_dim * ix_dim * ic_dim)
+    x = x.reshape(n_dim, iy_dim, ix_dim, ic_dim)
+    x = x.astype(np.float32)
+    return net, x
+
+def create_vgg16(path):
+    net = Sequential(*build_vgg_layers(N_CLS))
+    if path:
+        d = torch_load(argv[3], weights_only = True)
+        d2 = {}
+        for k, v in d.items():
+            d2[k[len("features."):]] = v
+        net.load_state_dict(d2)
+
+    l_te, names = load_cifar_test(Path("/tmp/data"), 16, N_CLS)
+    x, y_real = next(iter(l_te))
+    x = x.numpy()
+    if len(x.shape) == 4:
+        x = x.transpose(0, 2, 3, 1)
+    x = np.ascontiguousarray(x)
+    return net, x
+
+
 def main():
-    # Build model
-    # net = Sequential(*build_vgg_layers(N_CLS))
-    # if len(argv) == 4:
-    #     d = torch_load(argv[3], weights_only = True)
-    #     d2 = {}
-    #     for k, v in d.items():
-    #         d2[k[len("features."):]] = v
-    #     net.load_state_dict(d2)
-
-    # # Load one batch
-    # l_te, names = load_cifar_test(Path("/tmp/data"), 16, N_CLS)
-    # x, y_real = next(iter(l_te))
-    # x = x.numpy()
-    # if len(x.shape) == 4:
-    #     x = x.transpose(0, 2, 3, 1)
-    # x = np.ascontiguousarray(x)
-
-    x = np.random.randn(16, 100).astype(np.float32)
-    net = Sequential(Linear(100, 16))
-
-    mod = list(net.modules())[0][0]
-    weight = mod.weight.detach().numpy()
-    bias = mod.bias.detach().numpy()
-    y_real = x @ weight.T + bias
-
+    path = argv[3] if len(argv) == 4 else None
+    net, x = create_vgg16(path)
 
     # Run on torch
     with no_grad():
@@ -312,15 +471,17 @@ def main():
         y_torch = torch_run(net, x)
         cl_net, y_shape = torch_to_cl_net(net, list(x.shape))
 
-
-
     # Run on cl
     path = Path(argv[1])
     plat_idx = int(argv[2])
     y_cl = cl_run(cl_net, y_shape, x, path, plat_idx)
 
+    print("cl/torch diff  :", np.sum(np.abs(y_cl - y_torch)))
+
     # Compare
+    assert y_torch.shape == y_cl.shape
     assert y_torch.dtype == y_cl.dtype
+
     print(y_torch.argmax(axis = 1))
     print(y_cl.argmax(axis = 1))
 
