@@ -21,7 +21,7 @@ import pickle
 import torch
 
 V_SIZE = 8
-PE_S = 8
+PE_S = 16
 X_SCALE = 8
 
 # Dimensions for blocking matrix mul.
@@ -149,10 +149,6 @@ def read_np_arr(ctx, name, x):
     ptr = np.ctypeslib.as_ctypes(x)
     ev = ctx.read_buffer("main", name, x.nbytes, ptr)
     cl.wait_for_events([ev])
-
-def run_kernel(ctx, name, bufs, uints):
-    params = bufs + [(cl.cl_uint, i) for i in uints]
-    return ctx.run_kernel("main", "main", name, [1], None, params)
 
 def run_sd_kernel(ctx, qname, kname, params):
     params = [(cl.cl_uint, p) if type(p) == int else p
@@ -296,12 +292,9 @@ def linear_to_cl2(mod, x_shape):
 
     w_pad = np.pad(w, [(0, add_k), (0, add_m)])
     w_pad_tiled = np.ascontiguousarray(tile_matrix(w_pad, BLOCK_K, BLOCK_M))
-    #print(w_pad_tiled)
 
     assert w_pad_tiled.dtype == np.float32
 
-    # w = np.ascontiguousarray(tile_matrix(w, size_k, size_m))
-    # assert w.dtype == np.float32
     tasks = [
         ("preproc_a", [size_n, size_m, n_blocks, m_blocks], []),
         ("sa_matmul", [n_blocks, m_blocks, k_blocks], [w_pad_tiled]),
@@ -319,36 +312,38 @@ def batch_norm2d_to_cl(mod, x_shape):
     args = [prod(x_shape[:-1]), x_shape[-1]]
     return [("batch_norm2d", args, [mul, add])], x_shape
 
+def flatten_to_cl(mod, x_shape):
+    return [], (x_shape[0], prod(x_shape[1:]))
+
+def max_pool2d_to_cl(mod, x_shape):
+    n_dim, iy_dim, ix_dim, ic_dim = x_shape
+    y_shape = n_dim, iy_dim // 2, ix_dim // 2, ic_dim
+    return [("max_pool2d", list(x_shape) + [2], [])], y_shape
+
+def sequential_to_cl(mod, x_shape):
+    return [], x_shape
+
+def relu_to_cl(mod, x_shape):
+    return [("relu", [prod(x_shape)], [])], x_shape
+
 
 # Converts params to NumPy. Every layer has type, scalar params, and
 # buffer params.
 def torch_to_cl_net(net, x_shape):
+    handlers = {
+        BatchNorm2d: batch_norm2d_to_cl,
+        Conv2d : conv2d_to_cl2,
+        Flatten : flatten_to_cl,
+        Linear : linear_to_cl2,
+        MaxPool2d : max_pool2d_to_cl,
+        ReLU : relu_to_cl,
+        Sequential : sequential_to_cl
+    }
     tasks = []
     for m in net.modules():
         tp = type(m)
-        if tp == BatchNorm2d:
-            tasks2, y_shape = batch_norm2d_to_cl(m, x_shape)
-            tasks.extend(tasks2)
-        elif tp == Conv2d:
-            tasks2, y_shape = conv2d_to_cl2(m, x_shape)
-            tasks.extend(tasks2)
-        elif tp == Flatten:
-            y_shape = x_shape[0], prod(x_shape[1:])
-        elif tp == Linear:
-            tasks2, y_shape = linear_to_cl2(m, x_shape)
-            tasks.extend(tasks2)
-        elif tp == MaxPool2d:
-            tasks.append(("max_pool2d", list(x_shape) + [2], []))
-            n_dim, iy_dim, ix_dim, ic_dim = x_shape
-            y_shape = n_dim, iy_dim // 2, ix_dim // 2, ic_dim
-        elif tp == ReLU:
-            tasks.append(("relu", [prod(x_shape)], []))
-            y_shape = x_shape
-        elif tp == Sequential:
-            y_shape = x_shape
-        else:
-            assert False
-        x_shape = y_shape
+        tasks2, x_shape = handlers[tp](m, x_shape)
+        tasks.extend(tasks2)
     return tasks, x_shape
 
 def cl_run(cl_net, y_shape, x, path, plat_idx):
@@ -373,7 +368,7 @@ def cl_run(cl_net, y_shape, x, path, plat_idx):
     ctx.register_queue("aux1", props)
     ctx.register_queue("aux2", props)
 
-    buf_size = 256 * 1024**2
+    buf_size = 512 * 1024**2
     rw_flag = cl.MemFlags.CL_MEM_READ_WRITE
     ctx.register_buffer("x", buf_size, rw_flag)
     ctx.register_buffer("y", buf_size, rw_flag)
@@ -393,14 +388,20 @@ def cl_run(cl_net, y_shape, x, path, plat_idx):
         if tp == "sa_matmul":
             n_blocks, m_blocks, k_blocks = scalars
             w = param_buf_ids[0]
-            ev1 = run_sd_kernel(ctx, "main", "load_a", [src, n_blocks, m_blocks, k_blocks])
-            ev2 = run_sd_kernel(ctx, "aux1", "load_b", [w, n_blocks, m_blocks, k_blocks])
-            ev3 = run_sd_kernel(ctx, "aux2", "store", [dst, n_blocks, m_blocks, k_blocks])
-            cl.wait_for_events([ev1, ev2, ev3])
+            ev1 = run_sd_kernel(ctx, "main", "load_a", [
+                src, n_blocks, m_blocks, k_blocks
+            ])
+            ev2 = run_sd_kernel(ctx, "aux1", "load_b", [
+                w, n_blocks, m_blocks, k_blocks
+            ])
+            ev3 = run_sd_kernel(ctx, "aux2", "store", [
+                dst, n_blocks, m_blocks, k_blocks
+            ])
+            cl.wait_for_events([ev3])
             ev = ev3
         else:
-            bufs = [src, dst] + param_buf_ids
-            ev = run_kernel(ctx, tp, bufs, scalars)
+            ev = run_sd_kernel(ctx, "main", tp,
+                               [src, dst] + param_buf_ids + scalars)
         name = "%3d %-15s %-33s" % (i, tp, scalars)
         events.append((name, ev))
         src, dst = dst, src
@@ -450,7 +451,7 @@ def create_vgg16(path):
             d2[k[len("features."):]] = v
         net.load_state_dict(d2)
 
-    l_te, names = load_cifar_test(Path("/tmp/data"), 16, N_CLS)
+    l_te, names = load_cifar_test(Path("/tmp/data"), 128, N_CLS)
     x, y_real = next(iter(l_te))
     x = x.numpy()
     if len(x.shape) == 4:
