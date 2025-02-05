@@ -1,7 +1,6 @@
 // Copyright (C) 2025 Björn A. Lindqvist <bjourne@gmail.com>
 //
-// This OpenCL code implements functions necessary for inferring
-// vgg16.
+// This OpenCL program contains kernels for inferring vgg16.
 
 // Max nr of supported channels.
 #define N_CHANS_MAX     1024
@@ -13,37 +12,69 @@
     ((a) * (bd) * (cd) * (dd) + (b) * (cd) * (dd) + (c) * (dd) + (d))
 #define MAX(a, b)       ((a) > (b) ? (a) : (b))
 
+// The affine transform has to be precomputed on the host:
+//
+//      mul = weight / sqrt(var + 1e-5)
+//      add = -mean * mul + bias
 __attribute__((max_global_work_dim(0)))
 __attribute__((uses_global_work_offset(0)))
 kernel void
 batch_norm2d(
     global const float * restrict X,
     global float * restrict Y,
-    global const float * restrict mean,
-    global const float * restrict var,
-    global const float * restrict weights,
-    global const float * restrict bias,
-    uint n_dim, uint y_dim, uint x_dim, uint c_dim
+    global const float * restrict mul,
+    global const float * restrict add,
+    uint n_dim, uint c_dim
 ) {
-    // Precompute affine transform. weight[i] / sqrt(var[i] + eps)
-    float mul[N_CHANS_MAX];
-    float add[N_CHANS_MAX];
-    for (uint c = 0; c < c_dim; c++) {
-        mul[c] = weights[c] / sqrt(var[c] + 1e-5);
-        add[c] = -mean[c] * mul[c] + bias[c];
-    }
     for (uint n = 0; n < n_dim; n++) {
-        for (uint y = 0; y < y_dim; y++) {
-            for (uint x = 0; x < x_dim; x++) {
-                for (uint c = 0; c < c_dim; c++) {
-                    uint i = IDX4D(n_dim, y_dim, x_dim, c_dim,
-                                   n, y, x, c);
-                    Y[i] = mul[c] * X[i] + add[c];
-                }
-            }
+        for (uint c = 0; c < c_dim; c++) {
+            uint i = c_dim * n + c;
+            Y[i] = mul[c] * X[i] + add[c];
         }
     }
 }
+
+__attribute__((max_global_work_dim(0)))
+__attribute__((uses_global_work_offset(0)))
+kernel void
+linear_pad(
+    global const float * restrict X,
+    global float * restrict Y,
+    uint src_y, uint src_x,
+    uint dst_y, uint dst_x
+) {
+    for (uint y = 0; y < dst_y; y++) {
+        for (uint x = 0; x < dst_x; x++) {
+            float v = 0;
+            if (y < src_y && x < src_x) {
+                v = X[src_x * y + x];
+            }
+            Y[dst_x * y + x] = v;
+        }
+    }
+}
+
+__attribute__((max_global_work_dim(0)))
+__attribute__((uses_global_work_offset(0)))
+kernel void
+linear_unpad(
+    global const float * restrict X,
+    global float * restrict Y,
+    uint src_y, uint src_x,
+    uint dst_y, uint dst_x
+) {
+    for (uint y = 0; y < dst_y; y++) {
+        for (uint x = 0; x < dst_x; x++) {
+            Y[dst_x * y + x] = X[src_x * y + x];
+        }
+    }
+}
+
+
+
+
+
+
 
 // X    : (n, m)
 // W_t  : (k, m)
@@ -70,27 +101,20 @@ linear(
     }
 }
 
-// Note that the weights W_t are transposed.
-//
-// X    : (n, iy, ix, ic)
-// Xp   : (n * oy * ox, fy * fx * ic)
-// W_t  : (oc_dim, fy * fx * ic)
-// Y    : (n, oy, ox, oc)
+// X:   (n, iy, ix, ic)
+// Y:   (n * oy * ox, fy * fx * ic)
 __attribute__((max_global_work_dim(0)))
 __attribute__((uses_global_work_offset(0)))
 kernel void
-conv2d(
+conv2d_im2col(
     global const float * restrict X,
-    global float * restrict Xp,
     global float * restrict Y,
-    global const float * restrict W_t,
     uint n_dim,
     uint iy_dim, uint ix_dim,
     uint fy_dim, uint fx_dim,
     uint ic_dim, uint oc_dim,
     uint pad
-)   {
-    // First do im2col and store in Xp
+) {
     uint oy_dim = iy_dim + 2 * pad - fy_dim + 1;
     uint ox_dim = ix_dim + 2 * pad - fx_dim + 1;
     uint at = 0;
@@ -108,7 +132,75 @@ conv2d(
                                                  n, iy, ix, ic);
                                 v = X[idx];
                             }
-                            Xp[at] = v;
+                            Y[at] = v;
+                            at++;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+// Note that the weights W_t are transposed.
+//
+// X    : (n, m)
+// W_t  : (k, m)
+// Y    : (n, k)
+__attribute__((max_global_work_dim(0)))
+__attribute__((uses_global_work_offset(0)))
+kernel void
+conv2d_matmul(
+    global const float * restrict X,
+    global float * restrict Y,
+    global const float * restrict W_t,
+    uint mat_n, uint mat_m, uint mat_k
+) {
+    for (uint n = 0; n < mat_n; n++) {
+        for (uint k = 0; k < mat_k; k++) {
+            float acc = 0;
+            for (uint m = 0; m < mat_m; m++) {
+                acc += X[mat_m * n + m] * W_t[mat_m * k + m];
+            }
+            Y[mat_k * n + k] = acc;
+        }
+    }
+}
+
+__attribute__((max_global_work_dim(0)))
+__attribute__((uses_global_work_offset(0)))
+kernel void
+conv2d_full(
+    global const float * restrict X,
+    global float * restrict Y,
+    global float * restrict T,
+    global const float * restrict W_t,
+    uint n_dim,
+    uint iy_dim, uint ix_dim,
+    uint fy_dim, uint fx_dim,
+    uint ic_dim, uint oc_dim,
+    uint pad
+) {
+    // // First do im2col and store in Xp
+    uint oy_dim = iy_dim + 2 * pad - fy_dim + 1;
+    uint ox_dim = ix_dim + 2 * pad - fx_dim + 1;
+    uint at = 0;
+    for (uint n = 0; n < n_dim; n++) {
+        for (uint oy = 0; oy < oy_dim; oy++) {
+            for (uint ox = 0; ox < ox_dim; ox++) {
+                for (uint fy = 0; fy < fy_dim; fy++) {
+                    for (uint fx = 0; fx < fx_dim; fx++) {
+                        int iy = oy + fy - pad;
+                        int ix = ox + fx - pad;
+                        for (uint ic = 0; ic < ic_dim; ic++) {
+                            float v = 0;
+                            if (iy >= 0 && iy < iy_dim && ix >= 0&& ix < ix_dim) {
+                                uint idx = IDX4D(n_dim, iy_dim, ix_dim, ic_dim,
+                                                 n, iy, ix, ic);
+                                v = X[idx];
+                            }
+                            T[at] = v;
                             at++;
                         }
                     }
@@ -120,17 +212,18 @@ conv2d(
     uint mat_m = fy_dim * fx_dim * ic_dim;
     uint mat_k = oc_dim;
 
-    // Then multiply Xp * W
+    // Then multiply T * W
     for (uint n = 0; n < mat_n; n++) {
         for (uint k = 0; k < mat_k; k++) {
             float acc = 0;
             for (uint m = 0; m < mat_m; m++) {
-                acc += Xp[mat_m * n + m] * W_t[mat_m * k + m];
+                acc += T[mat_m * n + m] * W_t[mat_m * k + m];
             }
             Y[mat_k * n + k] = acc;
         }
     }
 }
+
 
 __attribute__((max_global_work_dim(0)))
 __attribute__((uses_global_work_offset(0)))

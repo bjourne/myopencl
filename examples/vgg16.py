@@ -1,7 +1,7 @@
 # Copyright (C) 2025 Björn A. Lindqvist <bjourne@gmail.com>
 #
 # This example implements VGG16 inference using OpenCL.
-from math import prod
+from math import ceil, prod
 from myopencl.objs import Context
 from pathlib import Path
 from sys import argv
@@ -17,6 +17,15 @@ from torchvision.transforms import Compose, Normalize, ToTensor
 import myopencl as cl
 import numpy as np
 import pickle
+
+V_SIZE = 8
+PE_S = 8
+X_SCALE = 8
+
+# Dimensions for blocking matrix mul.
+BLOCK_N = PE_S ** 2
+BLOCK_M = X_SCALE * V_SIZE
+BLOCK_K = PE_S ** 2
 
 ########################################################################
 # Torch code
@@ -112,64 +121,107 @@ def run_kernel(ctx, name, bufs, uints):
 # OpenCL layer handling
 ########################################################################
 
+def conv2d_to_cl(mod, x_shape):
+    assert not mod.bias
+    w = mod.weight.numpy()
+    oc_dim, ic_dim, fy_dim, fx_dim = w.shape
+
+    # oc, fy, fx, ic
+    w_t = np.ascontiguousarray(w.transpose(0, 2, 3, 1))
+    pad = mod.padding[0]
+    n_dim, iy_dim, ix_dim, ic_dim = x_shape
+    oy_dim = iy_dim + 2 * pad - fy_dim + 1
+    ox_dim = ix_dim + 2 * pad - fx_dim + 1
+
+    layers = []
+    args = [
+        n_dim,
+        iy_dim, ix_dim,
+        fy_dim, fx_dim,
+        ic_dim, oc_dim,
+        pad
+    ]
+    layers.append(("conv2d_im2col", args, []))
+
+    mat_n = n_dim * oy_dim * ox_dim
+    mat_m = fy_dim * fx_dim * ic_dim
+    mat_k = oc_dim
+    args = [mat_n, mat_m, mat_k]
+    layers.append(("conv2d_matmul", args, [w_t]))
+    return layers, [n_dim, oy_dim, ox_dim, oc_dim]
+
+def get_padded_dims(n, m, k):
+    n_blocks = ceil(n / BLOCK_N)
+    m_blocks = max(ceil(m / BLOCK_M), 3)
+    k_blocks = ceil(k / BLOCK_K)
+
+    pad_n = n_blocks * BLOCK_N
+    pad_m = m_blocks * BLOCK_M
+    pad_k = k_blocks * BLOCK_K
+
+    return pad_n, pad_m, pad_k
+
+def linear_to_cl(mod, x_shape):
+    w = mod.weight.numpy()
+    b = mod.bias.numpy()
+    mat_n, mat_m = x_shape
+
+    # Note that it is transposed
+    mat_k, _ = w.shape
+
+    pad_n, pad_m, pad_k = get_padded_dims(mat_n, mat_m, mat_k)
+
+    w = np.pad(w, [(0, pad_k - mat_k), (0, pad_m - mat_m)])
+    b = np.pad(b, [(0, pad_k - mat_k)])
+
+    layers = [
+        ("linear_pad", [mat_n, mat_m, pad_n, pad_m], []),
+        ("linear", [pad_n, pad_m, pad_k], [w, b]),
+        ("linear_unpad", [pad_n, pad_k, mat_n, mat_k], [])
+    ]
+    return layers, [mat_n, mat_k]
+
+def batch_norm2d_to_cl(mod, x_shape):
+    buffers = mod.running_mean, mod.running_var, mod.weight, mod.bias
+    mean, var, weight, bias = [b.numpy() for b in buffers]
+    mul = weight / np.sqrt(var + 1e-5)
+    add = -mean * mul + bias
+    args = [prod(x_shape[:-1]), x_shape[-1]]
+    return [("batch_norm2d", args, [mul, add])], x_shape
+
+
 # Converts params to NumPy. Every layer has type, scalar params, and
 # buffer params.
 def torch_to_cl_net(net, x_shape):
-    layers = []
+    tasks = []
     for m in net.modules():
         tp = type(m)
         if tp == BatchNorm2d:
-            buffers = m.running_mean, m.running_var, m.weight, m.bias
-            buffers = [b.numpy() for b in buffers]
-            next_shape = x_shape
-            layers.append(("batch_norm2d", x_shape, buffers))
+            tasks2, y_shape = batch_norm2d_to_cl(m, x_shape)
+            tasks.extend(tasks2)
         elif tp == Conv2d:
-            assert not m.bias
-            w = m.weight.numpy()
-            oc_dim, ic_dim, fy_dim, fx_dim = w.shape
-
-            # oc, fy, fx, ic
-            w_t = np.ascontiguousarray(w.transpose(0, 2, 3, 1))
-
-            pad = m.padding[0]
-            n_dim, iy_dim, ix_dim, ic_dim = x_shape
-            oy_dim = iy_dim + 2 * pad - fy_dim + 1
-            ox_dim = ix_dim + 2 * pad - fx_dim + 1
-
-            scalars = [
-                n_dim,
-                iy_dim, ix_dim,
-                fy_dim, fx_dim,
-                ic_dim, oc_dim,
-                pad
-            ]
-            layers.append(("conv2d", scalars, [w_t]))
-            next_shape = [n_dim, oy_dim, ox_dim, oc_dim]
+            tasks2, y_shape = conv2d_to_cl(m, x_shape)
+            tasks.extend(tasks2)
         elif tp == Flatten:
-            n_dim, iy_dim, ix_dim, ic_dim = x_shape
-            next_shape = n_dim, iy_dim * ix_dim * ic_dim
+            y_shape = x_shape[0], prod(x_shape[1:])
         elif tp == Linear:
-            w = m.weight.numpy()
-            b = m.bias.numpy()
-            mat_n, mat_m = x_shape
-            mat_k, _ = w.shape
-            layers.append(("linear", [mat_n, mat_m, mat_k], [w, b]))
-            next_shape = mat_n, mat_k
+            tasks2, y_shape = linear_to_cl(m, x_shape)
+            tasks.extend(tasks2)
         elif tp == MaxPool2d:
-            layers.append(("max_pool2d", list(x_shape) + [2], []))
+            tasks.append(("max_pool2d", list(x_shape) + [2], []))
             n_dim, iy_dim, ix_dim, ic_dim = x_shape
-            next_shape = n_dim, iy_dim // 2, ix_dim // 2, ic_dim
+            y_shape = n_dim, iy_dim // 2, ix_dim // 2, ic_dim
         elif tp == ReLU:
-            layers.append(("relu", [prod(x_shape)], []))
-            next_shape = x_shape
+            tasks.append(("relu", [prod(x_shape)], []))
+            y_shape = x_shape
         elif tp == Sequential:
-            continue
+            y_shape = x_shape
         else:
             assert False
-        x_shape = next_shape
-    return layers, x_shape
+        x_shape = y_shape
+    return tasks, x_shape
 
-def cl_run(net, x, path, plat_idx):
+def cl_run(cl_net, y_shape, x, path, plat_idx):
     opts = format_build_opts(
         "-cl-std=CL2.0",
         "-Werror",
@@ -187,10 +239,7 @@ def cl_run(net, x, path, plat_idx):
     buf_size = 128 * 1024**2
     rw_flag = cl.MemFlags.CL_MEM_READ_WRITE
     ctx.register_buffer("x", buf_size, rw_flag)
-    ctx.register_buffer("tmp", buf_size, rw_flag)
     ctx.register_buffer("y", buf_size, rw_flag)
-
-    cl_net, y_shape = torch_to_cl_net(net, list(x.shape))
 
     for i, (_, _, buffers) in enumerate(cl_net):
         for j, buf in enumerate(buffers):
@@ -201,21 +250,17 @@ def cl_run(net, x, path, plat_idx):
     src, dst = "x", "y"
 
     events = []
-
     bef = time()
     for i, (tp, scalars, param_bufs) in enumerate(cl_net):
-        bufs = [src, dst]
-        if tp == "conv2d":
-            # Need this for im2col transformation.
-            bufs = [src, "tmp", dst]
-        bufs += [(i, j) for j in range(len(param_bufs))]
+        bufs = [src, dst] + [(i, j) for j in range(len(param_bufs))]
         ev = run_kernel(ctx, tp, bufs, scalars)
-        src, dst = dst, src
         name = "%3d %-15s %-33s" % (i, tp, scalars)
+        cl.wait_for_events([ev])
         events.append((name, ev))
+        src, dst = dst, src
 
     y = np.empty(y_shape, dtype = np.float32)
-    read_np_arr(ctx, "y", y)
+    read_np_arr(ctx, src, y)
     took = time() - bef
 
     attr_start = cl.ProfilingInfo.CL_PROFILING_COMMAND_START
@@ -233,36 +278,51 @@ def cl_run(net, x, path, plat_idx):
 N_CLS = 100
 
 def main():
-    # Load one batch
-    l_te, names = load_cifar_test(Path("/tmp/data"), 16, N_CLS)
-    x, y_real = next(iter(l_te))
-
-    x = x.numpy().transpose(0, 2, 3, 1)
-    x = np.ascontiguousarray(x)
-
     # Build model
-    net = Sequential(*build_vgg_layers(N_CLS))
-    path = Path(argv[1])
-    plat_idx = int(argv[2])
+    # net = Sequential(*build_vgg_layers(N_CLS))
+    # if len(argv) == 4:
+    #     d = torch_load(argv[3], weights_only = True)
+    #     d2 = {}
+    #     for k, v in d.items():
+    #         d2[k[len("features."):]] = v
+    #     net.load_state_dict(d2)
 
-    if len(argv) == 4:
-        d = torch_load(argv[3], weights_only = True)
-        d2 = {}
-        for k, v in d.items():
-            d2[k[len("features."):]] = v
-        net.load_state_dict(d2)
+    # # Load one batch
+    # l_te, names = load_cifar_test(Path("/tmp/data"), 16, N_CLS)
+    # x, y_real = next(iter(l_te))
+    # x = x.numpy()
+    # if len(x.shape) == 4:
+    #     x = x.transpose(0, 2, 3, 1)
+    # x = np.ascontiguousarray(x)
 
+    x = np.random.randn(16, 100).astype(np.float32)
+    net = Sequential(Linear(100, 16))
+
+    mod = list(net.modules())[0][0]
+    weight = mod.weight.detach().numpy()
+    bias = mod.bias.detach().numpy()
+    y_real = x @ weight.T + bias
+
+
+    # Run on torch
     with no_grad():
         # Train batch norm layers
         torch_run(net, x)
         net.eval()
         y_torch = torch_run(net, x)
-        y_cl = cl_run(net, x, path, plat_idx)
+        cl_net, y_shape = torch_to_cl_net(net, list(x.shape))
 
+
+
+    # Run on cl
+    path = Path(argv[1])
+    plat_idx = int(argv[2])
+    y_cl = cl_run(cl_net, y_shape, x, path, plat_idx)
+
+    # Compare
     assert y_torch.dtype == y_cl.dtype
     print(y_torch.argmax(axis = 1))
     print(y_cl.argmax(axis = 1))
-    print(y_real)
 
     diff = np.abs(y_cl - y_torch)
     print(np.max(diff), np.mean(diff))
