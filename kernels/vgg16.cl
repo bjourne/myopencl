@@ -1,9 +1,7 @@
 // Copyright (C) 2025 Björn A. Lindqvist <bjourne@gmail.com>
 //
-// This OpenCL program contains kernels for inferring vgg16.
-
-// Max nr of supported channels.
-#define N_CHANS_MAX     1024
+// This OpenCL program contains kernels for inferring VGG16 and other
+// networks.
 
 ////////////////////////////////////////////////////////////////////////
 // Macro utility
@@ -70,28 +68,21 @@ linear_unpad(
     }
 }
 
-
-
-
-
-
-
 // X    : (n, m)
 // W_t  : (k, m)
 // Y    : (n, k)
 __attribute__((max_global_work_dim(0)))
 __attribute__((uses_global_work_offset(0)))
 kernel void
-linear(
+linear_matmul(
     global const float * restrict X,
     global float * restrict Y,
     global const float * restrict W_t,
-    global const float * restrict B,
     uint n_dim, uint m_dim, uint k_dim
 ) {
     for (uint n = 0; n < n_dim; n++) {
         for (uint k = 0; k < k_dim; k++) {
-            float acc = B[k];
+            float acc = 0;
             for (uint m = 0; m < m_dim; m++) {
                 float w_val = W_t[k * m_dim + m];
                 acc += X[m_dim * n + m] * w_val;
@@ -100,6 +91,23 @@ linear(
         }
     }
 }
+
+__attribute__((max_global_work_dim(0)))
+__attribute__((uses_global_work_offset(0)))
+kernel void
+linear_bias(
+    global const float * restrict X,
+    global float * restrict Y,
+    global const float * restrict B,
+    uint n_dim, uint k_dim
+) {
+    for (uint n = 0; n < n_dim; n++) {
+        for (uint k = 0; k < k_dim; k++) {
+            Y[k_dim * n + k] = B[k] + X[k_dim * n + k];
+        }
+    }
+}
+
 
 // X:   (n, iy, ix, ic)
 // Y:   (n * oy * ox, fy * fx * ic)
@@ -237,6 +245,8 @@ relu(
         Y[i] = max(X[i], 0.0f);
     }
 }
+
+#define N_CHANS_MAX     1024
 
 // X    : (n, y, x, c)
 // Y    : (n, y / k_size, x / k_size, c)
