@@ -21,7 +21,7 @@ import pickle
 import torch
 
 V_SIZE = 8
-PE_S = 16
+PE_S = 4
 X_SCALE = 8
 
 # Dimensions for blocking matrix mul.
@@ -67,33 +67,6 @@ def tile_matrix(mat, ts_y, ts_x):
 ########################################################################
 # Torch code
 ########################################################################
-def build_vgg_layers(n_cls):
-    VGG16_LAYERS = [
-        64, 64, "M",
-        128, 128, "M",
-        256, 256, 256, "M",
-        512, 512, 512, "M",
-        512, 512, 512, "M",
-    ]
-    n_chans_in = 3
-    for v in VGG16_LAYERS:
-        if type(v) == int:
-            # Batch norm so no bias.
-            yield Conv2d(n_chans_in, v, 3, padding=1, bias=False)
-            yield BatchNorm2d(v)
-            yield ReLU(True)
-            n_chans_in = v
-        elif v == "M":
-            yield MaxPool2d(2)
-        else:
-            assert False
-    yield Flatten()
-    yield Linear(512, 4096)
-    yield ReLU(inplace = True)
-    yield Linear(4096, 4096)
-    yield ReLU(inplace = True)
-    yield Linear(4096, n_cls)
-
 def load_cifar_test(data_dir, batch_size, n_cls):
     norm = Normalize(
         (0.4914, 0.4822, 0.4465),
@@ -422,47 +395,24 @@ def cl_run(cl_net, y_shape, x, path, plat_idx):
     ctx.finish_and_release()
     return y
 
-N_CLS = 100
+def load_cifar100_net(path):
+    net = torch.load(path, weights_only = False)
 
-
-def create_linear_net():
-    net = Sequential(Linear(16, 32))
-    x = np.arange(8 * 16).reshape(8, 16).astype(np.float32)
-    return net, x
-
-def create_conv2d_net():
-    n_dim = 1
-    ic_dim, oc_dim = 4, 8
-    iy_dim, ix_dim = 32, 32
-    net = Sequential(
-        Conv2d(ic_dim, oc_dim, 3, padding = 1, bias = False)
-    )
-    x = np.arange(n_dim * iy_dim * ix_dim * ic_dim)
-    x = x.reshape(n_dim, iy_dim, ix_dim, ic_dim)
-    x = x.astype(np.float32)
-    return net, x
-
-def create_vgg16(path):
-    net = Sequential(*build_vgg_layers(N_CLS))
-    if path:
-        d = torch_load(argv[3], weights_only = True)
-        d2 = {}
-        for k, v in d.items():
-            d2[k[len("features."):]] = v
-        net.load_state_dict(d2)
-
-    l_te, names = load_cifar_test(Path("/tmp/data"), 128, N_CLS)
-    x, y_real = next(iter(l_te))
+    # And test data
+    l_te, names = load_cifar_test(Path("/tmp/data"), 16, 100)
+    x, _ = next(iter(l_te))
     x = x.numpy()
     if len(x.shape) == 4:
         x = x.transpose(0, 2, 3, 1)
     x = np.ascontiguousarray(x)
+
     return net, x
 
-
 def main():
-    path = argv[3] if len(argv) == 4 else None
-    net, x = create_vgg16(path)
+    # Load network
+    path = argv[3]
+
+    net, x = load_cifar100_net(path)
 
     # Run on torch
     with no_grad():
