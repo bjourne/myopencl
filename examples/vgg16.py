@@ -5,6 +5,7 @@ from math import ceil, prod
 from myopencl.objs import Context
 from numpy.lib.stride_tricks import as_strided
 from pathlib import Path
+from pickle import load as pickle_load
 from sys import argv
 from time import time
 
@@ -15,9 +16,9 @@ from torch.utils.data import DataLoader
 from torchvision.datasets import CIFAR10, CIFAR100
 from torchvision.transforms import Compose, Normalize, ToTensor
 
+import click
 import myopencl as cl
 import numpy as np
-import pickle
 import torch
 
 V_SIZE = 8
@@ -63,7 +64,6 @@ def tile(x, win, step, axis):
 def tile_matrix(mat, ts_y, ts_x):
     return tile(mat, (ts_y, ts_x), (ts_y, ts_x), (0, 1))
 
-
 ########################################################################
 # Torch code
 ########################################################################
@@ -81,7 +81,7 @@ def load_cifar_test(data_dir, batch_size, n_cls):
     else:
         meta = data_dir / 'cifar-100-python' / 'meta'
         with open(meta, 'rb') as f:
-            d = pickle.load(f)
+            d = pickle_load(f)
             names = d['fine_label_names']
     return l_te, names
 
@@ -123,7 +123,7 @@ def read_np_arr(ctx, name, x):
     ev = ctx.read_buffer("main", name, x.nbytes, ptr)
     cl.wait_for_events([ev])
 
-def run_sd_kernel(ctx, qname, kname, params):
+def run_kernel(ctx, qname, kname, params):
     params = [(cl.cl_uint, p) if type(p) == int else p
               for p in params]
     return ctx.run_kernel(qname, "main", kname, [1], None, params)
@@ -319,7 +319,7 @@ def torch_to_cl_net(net, x_shape):
         tasks.extend(tasks2)
     return tasks, x_shape
 
-def cl_run(cl_net, y_shape, x, path, plat_idx):
+def cl_run(cl_net, y_shape, x, source, plat_idx):
     opts = format_build_opts(
         "-cl-std=CL2.0",
         "-cl-fast-relaxed-math",
@@ -332,7 +332,7 @@ def cl_run(cl_net, y_shape, x, path, plat_idx):
         V_SIZE = V_SIZE
     )
     ctx = Context.from_indexes(plat_idx, 0)
-    ctx.register_program("main", path, opts)
+    ctx.register_program("main", source, opts)
     props = [
         cl.CommandQueueInfo.CL_QUEUE_PROPERTIES,
         cl.CommandQueueProperties.CL_QUEUE_PROFILING_ENABLE
@@ -361,20 +361,22 @@ def cl_run(cl_net, y_shape, x, path, plat_idx):
         if tp == "sa_matmul":
             n_blocks, m_blocks, k_blocks = scalars
             w = param_buf_ids[0]
-            ev1 = run_sd_kernel(ctx, "main", "load_a", [
+            ev1 = run_kernel(ctx, "main", "load_a", [
                 src, n_blocks, m_blocks, k_blocks
             ])
-            ev2 = run_sd_kernel(ctx, "aux1", "load_b", [
+            ev2 = run_kernel(ctx, "aux1", "load_b", [
                 w, n_blocks, m_blocks, k_blocks
             ])
-            ev3 = run_sd_kernel(ctx, "aux2", "store", [
+            ev3 = run_kernel(ctx, "aux2", "store", [
                 dst, n_blocks, m_blocks, k_blocks
             ])
             cl.wait_for_events([ev3])
             ev = ev3
         else:
-            ev = run_sd_kernel(ctx, "main", tp,
-                               [src, dst] + param_buf_ids + scalars)
+            ev = run_kernel(
+                ctx, "main", tp,
+                [src, dst] + param_buf_ids + scalars
+            )
         name = "%3d %-15s %-33s" % (i, tp, scalars)
         events.append((name, ev))
         src, dst = dst, src
@@ -405,14 +407,26 @@ def load_cifar100_net(path):
     if len(x.shape) == 4:
         x = x.transpose(0, 2, 3, 1)
     x = np.ascontiguousarray(x)
-
     return net, x
 
-def main():
-    # Load network
-    path = argv[3]
-
-    net, x = load_cifar100_net(path)
+@click.command()
+@click.argument(
+    "network",
+    type = click.Path(exists = True),
+)
+@click.argument(
+    "source",
+    nargs = -1,
+    type = click.Path(exists = True),
+)
+@click.option(
+    "-pi", "--platform-index",
+    default = 0,
+    help = "Index of platform to use."
+)
+def main(network, platform_index, source):
+    """Loads a PyTorch network and runs inteference on it for one batch."""
+    net, x = load_cifar100_net(network)
 
     # Run on torch
     with no_grad():
@@ -422,10 +436,8 @@ def main():
         y_torch = torch_run(net, x)
         cl_net, y_shape = torch_to_cl_net(net, list(x.shape))
 
-    # Run on cl
-    path = Path(argv[1])
-    plat_idx = int(argv[2])
-    y_cl = cl_run(cl_net, y_shape, x, path, plat_idx)
+    source = [Path(s) for s in source]
+    y_cl = cl_run(cl_net, y_shape, x, source[0], platform_index)
 
     print("cl/torch diff  :", np.sum(np.abs(y_cl - y_torch)))
 
@@ -440,4 +452,5 @@ def main():
     print(np.max(diff), np.mean(diff))
     print("Normed err: ", np.linalg.norm(y_cl - y_torch))
 
-main()
+if __name__ == "__main__":
+    main()
