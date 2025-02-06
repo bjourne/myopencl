@@ -131,6 +131,30 @@ def run_kernel(ctx, qname, kname, params):
 ########################################################################
 # OpenCL layer handling
 ########################################################################
+def schedule_sa_matmul(mat_w, size_n, size_m, size_k):
+    assert mat_w.size == size_m * size_k
+    n_blocks = ceil(size_n / BLOCK_N)
+    m_blocks = max(ceil(size_m / BLOCK_M), 3)
+    k_blocks = ceil(size_k / BLOCK_K)
+
+    pad_n = n_blocks * BLOCK_N
+    pad_m = m_blocks * BLOCK_M
+    pad_k = k_blocks * BLOCK_K
+
+    add_n = pad_n - size_n
+    add_m = pad_m - size_m
+    add_k = pad_k - size_k
+
+    mat_w = np.pad(mat_w, [(0, add_k), (0, add_m)])
+    mat_w = np.ascontiguousarray(tile_matrix(mat_w, BLOCK_K, BLOCK_M))
+    assert mat_w.dtype == np.float32
+
+    return [
+        ("preproc_a", [size_n, size_m, n_blocks, m_blocks], []),
+        ("sa_matmul", [n_blocks, m_blocks, k_blocks], [mat_w]),
+        ("postproc_c", [size_n, size_k, n_blocks, k_blocks], []),
+    ], [size_n, size_k]
+
 def conv2d_to_cl(mod, x_shape):
     assert not mod.bias
     w = mod.weight.numpy()
@@ -156,93 +180,13 @@ def conv2d_to_cl(mod, x_shape):
     size_m = fy_dim * fx_dim * ic_dim
     size_k = oc_dim
 
-    w_t = np.ascontiguousarray(w.transpose(0, 2, 3, 1))
-
-    args = [size_n, size_m, size_k]
-    tasks.append(("conv2d_matmul", args, [w_t]))
-    return tasks, [n_dim, oy_dim, ox_dim, oc_dim]
-
-def conv2d_to_cl2(mod, x_shape):
-    assert not mod.bias
-    w = mod.weight.numpy()
-    oc_dim, ic_dim, fy_dim, fx_dim = w.shape
-
-    # oc, fy, fx, ic
-    pad = mod.padding[0]
-    n_dim, iy_dim, ix_dim, ic_dim = x_shape
-    oy_dim = iy_dim + 2 * pad - fy_dim + 1
-    ox_dim = ix_dim + 2 * pad - fx_dim + 1
-
-    tasks = []
-    args = [
-        n_dim,
-        iy_dim, ix_dim,
-        fy_dim, fx_dim,
-        ic_dim, oc_dim,
-        pad
-    ]
-    tasks.append(("conv2d_im2col", args, []))
-
-    size_n = n_dim * oy_dim * ox_dim
-    size_m = fy_dim * fx_dim * ic_dim
-    size_k = oc_dim
-
-    n_blocks = ceil(size_n / BLOCK_N)
-    m_blocks = max(ceil(size_m / BLOCK_M), 3)
-    k_blocks = ceil(size_k / BLOCK_K)
-
-    pad_n = n_blocks * BLOCK_N
-    pad_m = m_blocks * BLOCK_M
-    pad_k = k_blocks * BLOCK_K
-
-    add_n = pad_n - size_n
-    add_m = pad_m - size_m
-    add_k = pad_k - size_k
-
-    tasks.append(("preproc_a", [size_n, size_m, n_blocks, m_blocks], []))
-
-    # After this transform, w is transposed!
-    w_t = np.ascontiguousarray(w.transpose(0, 2, 3, 1))
-    w_t = w_t.reshape((size_k, size_m))
-    w_t_pad = np.pad(w_t, [(0, add_k), (0, add_m)])
-    w_t_pad_tiled = np.ascontiguousarray(tile_matrix(w_t_pad, BLOCK_K, BLOCK_M))
-
-    tasks.append(("sa_matmul", [n_blocks, m_blocks, k_blocks], [w_t_pad_tiled]))
-    tasks.append(("postproc_c", [size_n, size_k, n_blocks, k_blocks], []))
-    return tasks, [n_dim, oy_dim, ox_dim, oc_dim]
-
-def get_padded_dims(n, m, k):
-    n_blocks = ceil(n / BLOCK_N)
-    m_blocks = max(ceil(m / BLOCK_M), 3)
-    k_blocks = ceil(k / BLOCK_K)
-
-    pad_n = n_blocks * BLOCK_N
-    pad_m = m_blocks * BLOCK_M
-    pad_k = k_blocks * BLOCK_K
-
-    return pad_n, pad_m, pad_k
+    w = w.transpose(0, 2, 3, 1)
+    w = np.ascontiguousarray(w)
+    w = w.reshape(size_k, size_m)
+    tasks2, _ = schedule_sa_matmul(w, size_n, size_m, size_k)
+    return tasks + tasks2, [n_dim, oy_dim, ox_dim, oc_dim]
 
 def linear_to_cl(mod, x_shape):
-    w = mod.weight.numpy()
-    b = mod.bias.numpy()
-    mat_n, mat_m = x_shape
-
-    # Note that it is transposed
-    mat_k, _ = w.shape
-
-    pad_n, pad_m, pad_k = get_padded_dims(mat_n, mat_m, mat_k)
-
-    w = np.pad(w, [(0, pad_k - mat_k), (0, pad_m - mat_m)])
-
-    layers = [
-        ("linear_pad", [mat_n, mat_m, pad_n, pad_m], []),
-        ("linear_matmul", [pad_n, pad_m, pad_k], [w]),
-        ("linear_unpad", [pad_n, pad_k, mat_n, mat_k], []),
-        ("linear_bias", [mat_n, mat_k], [b])
-    ]
-    return layers, [mat_n, mat_k]
-
-def linear_to_cl2(mod, x_shape):
     w = mod.weight.numpy()
     b = mod.bias.numpy()
 
@@ -251,31 +195,9 @@ def linear_to_cl2(mod, x_shape):
     assert by == size_m
     assert len(b) == size_k
 
-    n_blocks = ceil(size_n / BLOCK_N)
-    m_blocks = max(ceil(size_m / BLOCK_M), 3)
-    k_blocks = ceil(size_k / BLOCK_K)
-
-    pad_n = n_blocks * BLOCK_N
-    pad_m = m_blocks * BLOCK_M
-    pad_k = k_blocks * BLOCK_K
-
-    add_n = pad_n - size_n
-    add_m = pad_m - size_m
-    add_k = pad_k - size_k
-
-    w_pad = np.pad(w, [(0, add_k), (0, add_m)])
-    w_pad_tiled = np.ascontiguousarray(tile_matrix(w_pad, BLOCK_K, BLOCK_M))
-
-    assert w_pad_tiled.dtype == np.float32
-
-    tasks = [
-        ("preproc_a", [size_n, size_m, n_blocks, m_blocks], []),
-        ("sa_matmul", [n_blocks, m_blocks, k_blocks], [w_pad_tiled]),
-        ("postproc_c", [size_n, size_k, n_blocks, k_blocks], []),
-        ("linear_bias", [size_n, size_k], [b])
-    ]
-    return tasks, [size_n, size_k]
-
+    tasks, x_shape = schedule_sa_matmul(w, size_n, size_m, size_k)
+    tasks.append(("linear_bias", x_shape, [b]))
+    return tasks, x_shape
 
 def batch_norm2d_to_cl(mod, x_shape):
     buffers = mod.running_mean, mod.running_var, mod.weight, mod.bias
@@ -305,9 +227,9 @@ def relu_to_cl(mod, x_shape):
 def torch_to_cl_net(net, x_shape):
     handlers = {
         BatchNorm2d: batch_norm2d_to_cl,
-        Conv2d : conv2d_to_cl2,
+        Conv2d : conv2d_to_cl,
         Flatten : flatten_to_cl,
-        Linear : linear_to_cl2,
+        Linear : linear_to_cl,
         MaxPool2d : max_pool2d_to_cl,
         ReLU : relu_to_cl,
         Sequential : sequential_to_cl
