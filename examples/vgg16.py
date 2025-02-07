@@ -1,6 +1,7 @@
 # Copyright (C) 2025 Björn A. Lindqvist <bjourne@gmail.com>
 #
 # This example implements VGG16 inference using OpenCL.
+
 from math import ceil, prod
 from myopencl.objs import Context
 from numpy.lib.stride_tricks import as_strided
@@ -9,8 +10,6 @@ from pickle import load as pickle_load
 from sys import argv
 from time import time
 
-from torch import from_numpy, no_grad
-from torch import load as torch_load
 from torch.nn import *
 from torch.utils.data import DataLoader
 from torchvision.datasets import CIFAR10, CIFAR100
@@ -20,15 +19,6 @@ import click
 import myopencl as cl
 import numpy as np
 import torch
-
-V_SIZE = 8
-PE_S = 4
-X_SCALE = 8
-
-# Dimensions for blocking matrix mul.
-BLOCK_N = PE_S ** 2
-BLOCK_M = X_SCALE * V_SIZE
-BLOCK_K = PE_S ** 2
 
 ########################################################################
 # NumPy code
@@ -90,7 +80,7 @@ def torch_run(net, x):
     # Torch wants (N, C, Y, X) tensors
     if len(x.shape) == 4:
         x = x.transpose(0, 3, 1, 2)
-    x = from_numpy(x)
+    x = torch.from_numpy(x)
     y = net(x)
     y = y.numpy()
     if len(y.shape) == 4:
@@ -131,22 +121,29 @@ def run_kernel(ctx, qname, kname, params):
 ########################################################################
 # OpenCL layer handling
 ########################################################################
-def schedule_sa_matmul(mat_w, size_n, size_m, size_k):
+def schedule_sa_matmul(mat_w, size_n, size_m, size_k, sa_dims):
     assert mat_w.size == size_m * size_k
-    n_blocks = ceil(size_n / BLOCK_N)
-    m_blocks = max(ceil(size_m / BLOCK_M), 3)
-    k_blocks = ceil(size_k / BLOCK_K)
 
-    pad_n = n_blocks * BLOCK_N
-    pad_m = m_blocks * BLOCK_M
-    pad_k = k_blocks * BLOCK_K
+    # Compute block dimensions
+    v_size, pe_s, x_scale = sa_dims
+    blk_n = pe_s ** 2
+    blk_m = x_scale * v_size
+    blk_k = pe_s ** 2
+
+    n_blocks = ceil(size_n / blk_n)
+    m_blocks = max(ceil(size_m / blk_m), 3)
+    k_blocks = ceil(size_k / blk_k)
+
+    pad_n = n_blocks * blk_n
+    pad_m = m_blocks * blk_m
+    pad_k = k_blocks * blk_k
 
     add_n = pad_n - size_n
     add_m = pad_m - size_m
     add_k = pad_k - size_k
 
     mat_w = np.pad(mat_w, [(0, add_k), (0, add_m)])
-    mat_w = np.ascontiguousarray(tile_matrix(mat_w, BLOCK_K, BLOCK_M))
+    mat_w = np.ascontiguousarray(tile_matrix(mat_w, blk_k, blk_m))
     assert mat_w.dtype == np.float32
 
     return [
@@ -155,7 +152,7 @@ def schedule_sa_matmul(mat_w, size_n, size_m, size_k):
         ("postproc_c", [size_n, size_k, n_blocks, k_blocks], []),
     ], [size_n, size_k]
 
-def conv2d_to_cl(mod, x_shape):
+def conv2d_to_cl(mod, x_shape, sa_dims):
     assert not mod.bias
     w = mod.weight.numpy()
     oc_dim, ic_dim, fy_dim, fx_dim = w.shape
@@ -183,10 +180,10 @@ def conv2d_to_cl(mod, x_shape):
     w = w.transpose(0, 2, 3, 1)
     w = np.ascontiguousarray(w)
     w = w.reshape(size_k, size_m)
-    tasks2, _ = schedule_sa_matmul(w, size_n, size_m, size_k)
+    tasks2, _ = schedule_sa_matmul(w, size_n, size_m, size_k, sa_dims)
     return tasks + tasks2, [n_dim, oy_dim, ox_dim, oc_dim]
 
-def linear_to_cl(mod, x_shape):
+def linear_to_cl(mod, x_shape, sa_dims):
     w = mod.weight.numpy()
     b = mod.bias.numpy()
 
@@ -195,11 +192,11 @@ def linear_to_cl(mod, x_shape):
     assert by == size_m
     assert len(b) == size_k
 
-    tasks, x_shape = schedule_sa_matmul(w, size_n, size_m, size_k)
+    tasks, x_shape = schedule_sa_matmul(w, size_n, size_m, size_k, sa_dims)
     tasks.append(("linear_bias", x_shape, [b]))
     return tasks, x_shape
 
-def batch_norm2d_to_cl(mod, x_shape):
+def batch_norm2d_to_cl(mod, x_shape, sa_dims):
     buffers = mod.running_mean, mod.running_var, mod.weight, mod.bias
     mean, var, weight, bias = [b.numpy() for b in buffers]
     mul = weight / np.sqrt(var + 1e-5)
@@ -207,24 +204,24 @@ def batch_norm2d_to_cl(mod, x_shape):
     args = [prod(x_shape[:-1]), x_shape[-1]]
     return [("batch_norm2d", args, [mul, add])], x_shape
 
-def flatten_to_cl(mod, x_shape):
+def flatten_to_cl(mod, x_shape, sa_dims):
     return [], (x_shape[0], prod(x_shape[1:]))
 
-def max_pool2d_to_cl(mod, x_shape):
+def max_pool2d_to_cl(mod, x_shape, sa_dims):
     n_dim, iy_dim, ix_dim, ic_dim = x_shape
     y_shape = n_dim, iy_dim // 2, ix_dim // 2, ic_dim
     return [("max_pool2d", list(x_shape) + [2], [])], y_shape
 
-def sequential_to_cl(mod, x_shape):
+def sequential_to_cl(mod, x_shape, sa_dims):
     return [], x_shape
 
-def relu_to_cl(mod, x_shape):
+def relu_to_cl(mod, x_shape, sa_dims):
     return [("relu", [prod(x_shape)], [])], x_shape
 
 
 # Converts params to NumPy. Every layer has type, scalar params, and
 # buffer params.
-def torch_to_cl_net(net, x_shape):
+def torch_to_cl_net(net, x_shape, sa_dims):
     handlers = {
         BatchNorm2d: batch_norm2d_to_cl,
         Conv2d : conv2d_to_cl,
@@ -237,11 +234,16 @@ def torch_to_cl_net(net, x_shape):
     tasks = []
     for m in net.modules():
         tp = type(m)
-        tasks2, x_shape = handlers[tp](m, x_shape)
+        tasks2, x_shape = handlers[tp](m, x_shape, sa_dims)
         tasks.extend(tasks2)
     return tasks, x_shape
 
-def cl_run(cl_net, y_shape, x, source, plat_idx):
+def cl_run(
+        cl_net,
+        y_shape, x,
+        source, platform_index, sa_dims
+):
+    v_size, pe_s, x_scale = sa_dims
     opts = format_build_opts(
         "-cl-std=CL2.0",
         "-cl-fast-relaxed-math",
@@ -249,11 +251,11 @@ def cl_run(cl_net, y_shape, x, source, plat_idx):
         "-Werror",
         INCLUDE_PP = 1,
         TYPE_SEL = 2,
-        PE_S = PE_S,
-        X_SCALE = X_SCALE,
-        V_SIZE = V_SIZE
+        V_SIZE = v_size,
+        PE_S = pe_s,
+        X_SCALE = x_scale
     )
-    ctx = Context.from_indexes(plat_idx, 0)
+    ctx = Context.from_indexes(platform_index, 0)
     ctx.register_program("main", source, opts)
     props = [
         cl.CommandQueueInfo.CL_QUEUE_PROPERTIES,
@@ -263,7 +265,7 @@ def cl_run(cl_net, y_shape, x, source, plat_idx):
     ctx.register_queue("aux1", props)
     ctx.register_queue("aux2", props)
 
-    buf_size = 512 * 1024**2
+    buf_size = 256 * 1024**2
     rw_flag = cl.MemFlags.CL_MEM_READ_WRITE
     ctx.register_buffer("x", buf_size, rw_flag)
     ctx.register_buffer("y", buf_size, rw_flag)
@@ -331,7 +333,18 @@ def load_cifar100_net(path):
     x = np.ascontiguousarray(x)
     return net, x
 
-@click.command()
+@click.command(context_settings={'show_default': True})
+@click.option(
+    "-pi", "--platform-index",
+    default = 0,
+    help = "Index of platform to use."
+)
+@click.option(
+    "--sa-dims",
+    default = (8, 16, 8),
+    nargs = 3,
+    help = "Systolic array dimensions (V_SIZE, PE_S, X_SCALE)"
+)
 @click.argument(
     "network",
     type = click.Path(exists = True),
@@ -339,27 +352,26 @@ def load_cifar100_net(path):
 @click.argument(
     "source",
     nargs = -1,
+    required = 1,
     type = click.Path(exists = True),
 )
-@click.option(
-    "-pi", "--platform-index",
-    default = 0,
-    help = "Index of platform to use."
-)
-def main(network, platform_index, source):
+def main(platform_index, sa_dims, network, source):
     """Loads a PyTorch network and runs inteference on it for one batch."""
     net, x = load_cifar100_net(network)
 
     # Run on torch
-    with no_grad():
+    with torch.no_grad():
         # Train batch norm layers
         torch_run(net, x)
         net.eval()
         y_torch = torch_run(net, x)
-        cl_net, y_shape = torch_to_cl_net(net, list(x.shape))
+        cl_net, y_shape = torch_to_cl_net(net, list(x.shape), sa_dims)
 
     source = [Path(s) for s in source]
-    y_cl = cl_run(cl_net, y_shape, x, source[0], platform_index)
+    y_cl = cl_run(
+        cl_net, y_shape, x, source[0],
+        platform_index, sa_dims
+    )
 
     print("cl/torch diff  :", np.sum(np.abs(y_cl - y_torch)))
 
