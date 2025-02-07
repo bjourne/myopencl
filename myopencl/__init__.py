@@ -844,9 +844,11 @@ def get_platform_ids():
 
 # Program
 def create_program_with_source(ctx, src):
-    strings = (c_char_p * 1)(src.encode("utf-8"))
-    lengths = (c_size_t * 1)(len(src))
-    return check_last(so.clCreateProgramWithSource, ctx, 1, strings, lengths)
+    assert not isinstance(src, str)
+    n = len(src)
+    strings = (c_char_p * n)(*[s.encode("utf-8") for s in src])
+    lengths = (c_size_t * n)(*[len(s) for s in src])
+    return check_last(so.clCreateProgramWithSource, ctx, n, strings, lengths)
 
 def create_program_with_binary(ctx, dev, binary):
     lengths = (c_size_t * 1)(len(binary))

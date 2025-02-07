@@ -369,7 +369,7 @@ def main(platform_index, sa_dims, network, source):
 
     source = [Path(s) for s in source]
     y_cl = cl_run(
-        cl_net, y_shape, x, source[0],
+        cl_net, y_shape, x, source,
         platform_index, sa_dims
     )
 

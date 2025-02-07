@@ -67,15 +67,17 @@ class Context:
         self.events[name] = ev
         return ev
 
-    def register_program(self, pname, path, opts):
+    def register_program(self, pname, paths, opts):
         dev_id = self.device_id
         ctx = self.context
-        data = path.read_bytes()
-        if path.suffix == ".cl":
-            source = data.decode("utf-8")
+
+        suffix = paths[0].suffix
+        data = [p.read_bytes() for p in paths]
+        if suffix == ".cl":
+            source = [d.decode("utf-8") for d in data]
             prog = cl.create_program_with_source(ctx, source)
         else:
-            prog = cl.create_program_with_binary(ctx, dev_id, data)
+            prog = cl.create_program_with_binary(ctx, dev_id, data[0])
 
         cl.build_program(prog, dev_id, opts, True, True)
         self.programs[pname] = prog
@@ -131,6 +133,7 @@ class Context:
     def enqueue_kernel(self, qname, pname, kname, gl_work, lo_work):
         q = self.queues[qname]
         k = self.kernels[pname][kname]
+        # Maybe these events should be registered?
         return cl.enqueue_nd_range_kernel(q, k, gl_work, lo_work)
 
     def set_kernel_args(self, pname, kname, args):

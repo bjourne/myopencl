@@ -15,12 +15,12 @@ def get_device_type(device_id):
 
 @mark.parametrize("platform_id, device_id", PAIRS)
 def test_autorun(platform_id, device_id):
-    # Crashes on FPGA devices
+    # Crashes on FPGA devices.
     if get_device_type(device_id) == cl.DeviceType.CL_DEVICE_TYPE_ACCELERATOR:
         return
     ctx = cl.create_context(device_id)
 
-    source = Path("kernels/autorun.cl").read_text("utf-8")
+    source = [Path("kernels/autorun.cl").read_text("utf-8")]
     prog = cl.create_program_with_source(ctx, source)
     queue = cl.create_command_queue_with_properties(ctx, device_id, [])
 

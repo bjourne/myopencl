@@ -83,7 +83,6 @@ def test_event_err(platform_id, device_id):
 @mark.parametrize("platform_id, device_id", PAIRS)
 def test_invalid_binary(platform_id, device_id):
     ctx = cl.create_context(device_id)
-
     b = bytes([1, 2, 3, 4])
     try:
         cl.create_program_with_binary(ctx, device_id, b)
@@ -91,6 +90,21 @@ def test_invalid_binary(platform_id, device_id):
         assert e.code == cl.ErrorCode.CL_INVALID_BINARY
 
     cl.release(ctx)
+
+@mark.parametrize("platform_id, device_id", PAIRS)
+def test_create_program_with_source(platform_id, device_id):
+    ctx = cl.create_context(device_id)
+    src1 = """
+    __kernel void kern1() { }
+    """
+    src2 = """
+    __kernel void kern2() {}
+    """
+    prog = cl.create_program_with_source(ctx, [src1, src2])
+    cl.build_program(prog, device_id, "", True, True)
+    cl.release(prog)
+    cl.release(ctx)
+
 
 ########################################################################
 # Tests: higher level

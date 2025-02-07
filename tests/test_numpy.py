@@ -69,7 +69,7 @@ def test_vecadd(platform_id, device_id):
     ev2 = cl.enqueue_fill_buffer(queue, mem_b, el_tp(2.5), 0, nbytes)
     cl.wait_for_events([ev1, ev2])
 
-    source = VECADD.read_text("utf-8")
+    source = [VECADD.read_text("utf-8")]
     prog = cl.create_program_with_source(ctx, source)
     cl.build_program(prog, device_id, "-Werror -cl-std=CL2.0", True, True)
     kern = cl.create_kernel(prog, "vecadd")
