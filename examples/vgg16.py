@@ -95,23 +95,22 @@ def format_build_opts(*args, **kw):
     defs = [f"-D {k}={v}" for (k, v) in kw.items()]
     return " ".join(list(args) + defs)
 
-def write_np_arr(ctx, name, x):
+def write_np_arr(ctx, qname, bname, x):
     assert x.flags["C_CONTIGUOUS"]
     assert x.data.contiguous
     assert x.dtype == np.float32
     ptr = np.ctypeslib.as_ctypes(x)
     nbytes = x.nbytes
-    return ctx.write_buffer("main", name, nbytes, ptr)
+    return ctx.write_buffer(qname, bname, nbytes, ptr)
 
-def create_and_write_np_arr(ctx, name, x):
+def create_and_write_np_arr(ctx, qname, bname, x):
     ro_flag = cl.MemFlags.CL_MEM_READ_ONLY
-    ctx.register_buffer(name, x.nbytes, ro_flag)
-    write_np_arr(ctx, name, x)
+    ctx.register_buffer(bname, x.nbytes, ro_flag)
+    return write_np_arr(ctx, qname, bname, x)
 
-def read_np_arr(ctx, name, x):
+def read_np_arr(ctx, qname, bname, x):
     ptr = np.ctypeslib.as_ctypes(x)
-    ev = ctx.read_buffer("main", name, x.nbytes, ptr)
-    cl.wait_for_events([ev])
+    return ctx.read_buffer(qname, bname, x.nbytes, ptr)
 
 def run_kernel(ctx, qname, kname, params):
     params = [(cl.cl_uint, p) if type(p) == int else p
@@ -147,9 +146,12 @@ def schedule_sa_matmul(mat_w, size_n, size_m, size_k, sa_dims):
     assert mat_w.dtype == np.float32
 
     return [
-        ("preproc_a", [size_n, size_m, n_blocks, m_blocks], []),
-        ("sa_matmul", [n_blocks, m_blocks, k_blocks], [mat_w]),
-        ("postproc_c", [size_n, size_k, n_blocks, k_blocks], []),
+        [("preproc_a", ["src", "dst", size_n, size_m, n_blocks, m_blocks])],
+        [("load_a", ["src", n_blocks, m_blocks, k_blocks]),
+         ("load_b", [mat_w, n_blocks, m_blocks, k_blocks]),
+         ("store", ["dst", n_blocks, m_blocks, k_blocks])
+         ],
+        [("postproc_c", ["src", "dst", size_n, size_k, n_blocks, k_blocks])]
     ], [size_n, size_k]
 
 def conv2d_to_cl(mod, x_shape, sa_dims):
@@ -165,13 +167,14 @@ def conv2d_to_cl(mod, x_shape, sa_dims):
 
     tasks = []
     args = [
+        "src", "dst",
         n_dim,
         iy_dim, ix_dim,
         fy_dim, fx_dim,
         ic_dim, oc_dim,
         pad
     ]
-    tasks.append(("conv2d_im2col", args, []))
+    tasks.append([("conv2d_im2col", args)])
 
     size_n = n_dim * oy_dim * ox_dim
     size_m = fy_dim * fx_dim * ic_dim
@@ -193,7 +196,9 @@ def linear_to_cl(mod, x_shape, sa_dims):
     assert len(b) == size_k
 
     tasks, x_shape = schedule_sa_matmul(w, size_n, size_m, size_k, sa_dims)
-    tasks.append(("linear_bias", x_shape, [b]))
+    tasks.append(
+        [("linear_bias", ["src", "dst", b] + x_shape)]
+    )
     return tasks, x_shape
 
 def batch_norm2d_to_cl(mod, x_shape, sa_dims):
@@ -201,8 +206,10 @@ def batch_norm2d_to_cl(mod, x_shape, sa_dims):
     mean, var, weight, bias = [b.numpy() for b in buffers]
     mul = weight / np.sqrt(var + 1e-5)
     add = -mean * mul + bias
-    args = [prod(x_shape[:-1]), x_shape[-1]]
-    return [("batch_norm2d", args, [mul, add])], x_shape
+    dims = [prod(x_shape[:-1]), x_shape[-1]]
+    return [
+        [("batch_norm2d", ["src", "dst", mul, add] + dims)]
+    ], x_shape
 
 def flatten_to_cl(mod, x_shape, sa_dims):
     return [], (x_shape[0], prod(x_shape[1:]))
@@ -210,14 +217,17 @@ def flatten_to_cl(mod, x_shape, sa_dims):
 def max_pool2d_to_cl(mod, x_shape, sa_dims):
     n_dim, iy_dim, ix_dim, ic_dim = x_shape
     y_shape = n_dim, iy_dim // 2, ix_dim // 2, ic_dim
-    return [("max_pool2d", list(x_shape) + [2], [])], y_shape
+    return [
+        [("max_pool2d", ["src", "dst"] + list(x_shape) + [2])]
+    ], y_shape
 
 def sequential_to_cl(mod, x_shape, sa_dims):
     return [], x_shape
 
 def relu_to_cl(mod, x_shape, sa_dims):
-    return [("relu", [prod(x_shape)], [])], x_shape
-
+    return [
+        [("relu", ["src", "dst", prod(x_shape)])]
+    ], x_shape
 
 # Converts params to NumPy. Every layer has type, scalar params, and
 # buffer params.
@@ -237,6 +247,20 @@ def torch_to_cl_net(net, x_shape, sa_dims):
         tasks2, x_shape = handlers[tp](m, x_shape, sa_dims)
         tasks.extend(tasks2)
     return tasks, x_shape
+
+def map_args(src, dst, i, j, args):
+    for k, a in enumerate(args):
+        tp = type(a)
+        if tp == int:
+            yield cl.cl_uint, a
+        elif tp == np.ndarray:
+            yield i, j, k
+        elif a == "src":
+            yield src
+        elif a == "dst":
+            yield dst
+        else:
+            assert False
 
 def cl_run(
         cl_net,
@@ -265,57 +289,53 @@ def cl_run(
     ctx.register_queue("aux1", props)
     ctx.register_queue("aux2", props)
 
+    for i in range(4):
+        ctx.register_queue(i, props)
+
     buf_size = 256 * 1024**2
     rw_flag = cl.MemFlags.CL_MEM_READ_WRITE
-    ctx.register_buffer("x", buf_size, rw_flag)
-    ctx.register_buffer("y", buf_size, rw_flag)
+    ctx.register_buffer("src", buf_size, rw_flag)
+    ctx.register_buffer("dst", buf_size, rw_flag)
 
-    for i, (_, _, buffers) in enumerate(cl_net):
-        for j, buf in enumerate(buffers):
-            create_and_write_np_arr(ctx, (i, j), buf)
+    for i, invocations in enumerate(cl_net):
+        for j, (kname, args) in enumerate(invocations):
+            for k, arg in enumerate(args):
+                if type(arg) == np.ndarray:
+                    key = i, j, k
+                    create_and_write_np_arr(ctx, 0, (i, j, k), arg)
 
     # Write initial input
-    write_np_arr(ctx, "x", x)
-    src, dst = "x", "y"
+    ev = write_np_arr(ctx, 0, "src", x)
+    cl.wait_for_events([ev])
+    src, dst = "src", "dst"
 
-    events = []
+    log = []
     bef = time()
-    for i, (tp, scalars, param_bufs) in enumerate(cl_net):
-        param_buf_ids = [(i, j) for j in range(len(param_bufs))]
-        if tp == "sa_matmul":
-            n_blocks, m_blocks, k_blocks = scalars
-            w = param_buf_ids[0]
-            ev1 = run_kernel(ctx, "main", "load_a", [
-                src, n_blocks, m_blocks, k_blocks
-            ])
-            ev2 = run_kernel(ctx, "aux1", "load_b", [
-                w, n_blocks, m_blocks, k_blocks
-            ])
-            ev3 = run_kernel(ctx, "aux2", "store", [
-                dst, n_blocks, m_blocks, k_blocks
-            ])
-            cl.wait_for_events([ev3])
-            ev = ev3
-        else:
-            ev = run_kernel(
-                ctx, "main", tp,
-                [src, dst] + param_buf_ids + scalars
-            )
-        name = "%3d %-15s %-33s" % (i, tp, scalars)
-        events.append((name, ev))
+    for i, invocations in enumerate(cl_net):
+        these_evs = []
+        for j, (kname, args) in enumerate(invocations):
+            mapped_args = list(map_args(src, dst, i, j, args))
+            ev = ctx.run_kernel(j, "main", kname, [1], None, mapped_args)
+            these_evs.append(ev)
+            log.append((i, j, kname, args, ev))
+        cl.wait_for_events(these_evs)
         src, dst = dst, src
+    took = time() - bef
 
     y = np.empty(y_shape, dtype = np.float32)
-    read_np_arr(ctx, src, y)
-    took = time() - bef
+    ev = read_np_arr(ctx, 0, src, y)
+    cl.wait_for_events([ev])
 
     attr_start = cl.ProfilingInfo.CL_PROFILING_COMMAND_START
     attr_end = cl.ProfilingInfo.CL_PROFILING_COMMAND_END
-    for name, ev in events:
+    for i, j, kname, args, ev in log:
         start = cl.get_info(attr_start, ev)
         end = cl.get_info(attr_end, ev)
         secs = (end - start) * 1.0e-9
-        print("%-54s: %8.4f" % (name, secs))
+
+        args = " ".join("%7d" % a for a in args if type(a) == int)
+        print("%2d %2d %-15s %-65s %8.3f" % (i, j, kname, args, secs))
+
     print("%-54s: %8.4f" % ("total", took))
     print()
     ctx.finish_and_release()
@@ -325,7 +345,7 @@ def load_cifar100_net(path):
     net = torch.load(path, weights_only = False)
 
     # And test data
-    l_te, names = load_cifar_test(Path("/tmp/data"), 16, 100)
+    l_te, names = load_cifar_test(Path("/tmp/data"), 64, 100)
     x, _ = next(iter(l_te))
     x = x.numpy()
     if len(x.shape) == 4:
