@@ -6,6 +6,16 @@ from pathlib import Path
 import click
 import myopencl as cl
 
+def format_opts(includes, defines):
+    includes = [f"-I {ip}" for ip in includes]
+    defines = [f"-D {kv}" for kv in defines]
+    opts = [
+        "-cl-std=CL2.0",
+        "-cl-kernel-arg-info"
+    ] + includes + defines
+    return " ".join(opts)
+
+
 @click.group(
     invoke_without_command = True,
     no_args_is_help=True
@@ -45,7 +55,7 @@ def list_platforms():
     help = "Index of platform to use"
 )
 @click.option(
-    "-I", "include_paths",
+    "-I", "includes",
     type = click.Path(exists = True, file_okay = False, dir_okay = True),
     multiple = True,
     help = "Include path",
@@ -57,7 +67,7 @@ def list_platforms():
     help = "Definition",
     default = ()
 )
-def build_program(filename, platform_index, include_paths, defines):
+def build_program(filename, platform_index, includes, defines):
     """Build an OpenCL program and list its details. If the extension
     of FILENAME Is not .cl it is assumed to be a binary.
     """
@@ -80,13 +90,7 @@ def build_program(filename, platform_index, include_paths, defines):
         prog = cl.create_program_with_source(ctx, src)
     else:
         prog = cl.create_program_with_binary(ctx, dev, data)
-
-    includes = [f"-I {ip}" for ip in include_paths]
-    defines = [f"-D {kv}" for kv in defines]
-    opts = [
-        "-cl-std=CL2.0",
-        "-cl-kernel-arg-info"
-    ] + includes + defines
+    opts = format_opts(includes, defines)
     cl.build_program(prog, dev, " ".join(opts), True, True)
 
     wrap = terminal_wrapper()
@@ -116,6 +120,19 @@ def build_program(filename, platform_index, include_paths, defines):
     "-pi", "--platform-index", default = 0,
     help = "Index of platform to use"
 )
+@click.option(
+    "-I", "includes",
+    type = click.Path(exists = True, file_okay = False, dir_okay = True),
+    multiple = True,
+    help = "Include path",
+    default = ()
+)
+@click.option(
+    "-D", "defines",
+    multiple = True,
+    help = "Preprocessor defines",
+    default = ()
+)
 @click.argument(
     "filename",
     type = click.Path(exists = True)
@@ -128,7 +145,7 @@ def build_program(filename, platform_index, include_paths, defines):
     nargs = -1,
     required = 1
 )
-def benchmark_kernel(platform_index, filename, kernel, arguments):
+def benchmark_kernel(platform_index, includes, defines, filename, kernel, arguments):
     """
     Load the OpenCL program in FILENAME and run KERNEL with specified
     ARGUMENTS
@@ -136,7 +153,8 @@ def benchmark_kernel(platform_index, filename, kernel, arguments):
     from myopencl import so
     ctx = Context.from_indexes(platform_index, 0)
     paths = [Path(filename)]
-    ctx.register_program("main", paths, "")
+    opts = format_opts(includes, defines)
+    ctx.register_program("main", paths, opts)
     props = [
         cl.CommandQueueInfo.CL_QUEUE_PROPERTIES,
         cl.CommandQueueProperties.CL_QUEUE_PROFILING_ENABLE
