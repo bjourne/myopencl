@@ -1,7 +1,10 @@
 # Copyright (C) 2025 Björn A. Lindqvist <bjourne@gmail.com>
 #
 # This example implements VGG16 inference using OpenCL.
-
+#
+# Run using:
+#
+#   python examples/vgg16.py vgg16-full.pth kernels/ops/*.cl --sa-dims 16 4 8
 from math import ceil, prod
 from myopencl.objs import Context
 from numpy.lib.stride_tricks import as_strided
@@ -169,9 +172,8 @@ def conv2d_to_cl(mod, x_shape, sa_dims):
     args = [
         "src", "dst",
         n_dim,
-        iy_dim, ix_dim,
+        iy_dim, ix_dim, ic_dim,
         fy_dim, fx_dim,
-        ic_dim, oc_dim,
         pad
     ]
     tasks.append([("conv2d_im2col", args)])
@@ -346,7 +348,7 @@ def load_cifar100_net(path):
     net = torch.load(path, weights_only = False)
 
     # And test data
-    l_te, names = load_cifar_test(Path("/tmp/data"), 64, 100)
+    l_te, names = load_cifar_test(Path("/tmp/data"), 32, 100)
     x, _ = next(iter(l_te))
     x = x.numpy()
     if len(x.shape) == 4:
@@ -400,8 +402,8 @@ def main(platform_index, sa_dims, network, source):
     assert y_torch.shape == y_cl.shape
     assert y_torch.dtype == y_cl.dtype
 
-    print(y_torch.argmax(axis = 1))
-    print(y_cl.argmax(axis = 1))
+    pdiff = y_torch.argmax(axis = 1) - y_cl.argmax(axis = 1)
+    print("pdiff", np.sum(pdiff))
 
     diff = np.abs(y_cl - y_torch)
     print(np.max(diff), np.mean(diff))
