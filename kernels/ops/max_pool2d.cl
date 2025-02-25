@@ -1,3 +1,5 @@
+#include "kernels/ops/utils.h"
+
 #define N_CHANS_MAX     1024
 
 // X    : (n, y, x, c)

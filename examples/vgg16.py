@@ -160,26 +160,25 @@ def schedule_sa_matmul(mat_w, size_n, size_m, size_k, sa_dims):
 def conv2d_to_cl(mod, x_shape, sa_dims):
     assert not mod.bias
     w = mod.weight.numpy()
-    oc_dim, ic_dim, fy_dim, fx_dim = w.shape
+    oc_dim, ic_dim, k_size, k_size = w.shape
 
-    # oc, fy, fx, ic
     pad = mod.padding[0]
     n_dim, iy_dim, ix_dim, ic_dim = x_shape
-    oy_dim = iy_dim + 2 * pad - fy_dim + 1
-    ox_dim = ix_dim + 2 * pad - fx_dim + 1
+    oy_dim = iy_dim + 2 * pad - k_size + 1
+    ox_dim = ix_dim + 2 * pad - k_size + 1
 
     tasks = []
     args = [
         "src", "dst",
         n_dim,
         iy_dim, ix_dim, ic_dim,
-        fy_dim, fx_dim,
+        k_size,
         pad
     ]
     tasks.append([("conv2d_im2col", args)])
 
     size_n = n_dim * oy_dim * ox_dim
-    size_m = fy_dim * fx_dim * ic_dim
+    size_m = k_size * k_size * ic_dim
     size_k = oc_dim
 
     w = w.transpose(0, 2, 3, 1)
@@ -274,7 +273,6 @@ def cl_run(
         "-cl-std=CL2.0",
         "-cl-fast-relaxed-math",
         "-cl-mad-enable",
-        "-Werror",
         INCLUDE_PP = 1,
         TYPE_SEL = 2,
         V_SIZE = v_size,
@@ -360,7 +358,7 @@ def load_cifar100_net(path):
 @click.option(
     "-pi", "--platform-index",
     default = 0,
-    help = "Index of platform to use."
+    help = "Index of platform to use"
 )
 @click.option(
     "--sa-dims",

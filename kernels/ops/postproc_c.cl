@@ -1,4 +1,5 @@
 #include "kernels/ops/sysarr.h"
+#include "kernels/ops/utils.h"
 
 // Cp:  (N, K, BLOCK_N, PE_S, PE_S)
 // C:   (N, K)
