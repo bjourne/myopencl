@@ -11,9 +11,14 @@ preproc_a(
     uint N, uint M
 ) {
     // Pad and tile the A matrix.
+#pragma ivdep
     for (uint n0 = 0; n0 < N; n0++) {
+#pragma ivdep
         for (uint m0 = 0; m0 < M; m0++) {
+#pragma ivdep
             for (int n1 = 0; n1 < BLOCK_N; n1++) {
+#pragma ivdep
+#pragma unroll 16
                 for (uint m1 = 0; m1 < BLOCK_M; m1++) {
                     uint n = n0 * BLOCK_N + n1;
                     uint m = m0 * BLOCK_M + m1;
