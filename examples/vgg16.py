@@ -292,13 +292,14 @@ def cl_run(
     for i in range(4):
         ctx.register_queue(i, props)
 
-    buf_size = 256 * 1024**2
+    buf_size = 512 * 1024**2
     rw_flag = cl.MemFlags.CL_MEM_READ_WRITE
     ctx.register_buffer("src", buf_size, rw_flag)
     ctx.register_buffer("dst", buf_size, rw_flag)
 
     for i, invocations in enumerate(cl_net):
         for j, (kname, args) in enumerate(invocations):
+
             for k, arg in enumerate(args):
                 if type(arg) == np.ndarray:
                     key = i, j, k
