@@ -1,4 +1,5 @@
-# Copyright (C) 2024 Björn A. Lindqvist
+# Copyright (C) 2024-2025 Björn A. Lindqvist <bjourne@gmail.com>
+from myopencl.objs import Context
 from myopencl.utils import INDENT_STR, pp_dict, terminal_wrapper
 from pathlib import Path
 
@@ -41,7 +42,7 @@ def list_platforms():
 )
 @click.option(
     "-pi", "--platform-index", default = 0,
-    help = "Index of platform to use."
+    help = "Index of platform to use"
 )
 @click.option(
     "-I", "include_paths",
@@ -75,7 +76,8 @@ def build_program(filename, platform_index, include_paths, defines):
 
     data = path.read_bytes()
     if path.suffix == ".cl":
-        prog = cl.create_program_with_source(ctx, data.decode("utf-8"))
+        src = [data.decode("utf-8")]
+        prog = cl.create_program_with_source(ctx, src)
     else:
         prog = cl.create_program_with_binary(ctx, dev, data)
 
@@ -108,6 +110,60 @@ def build_program(filename, platform_index, include_paths, defines):
     cl.release(prog)
     cl.release(ctx)
     cl.release(dev)
+
+@cli.command(context_settings = dict(show_default = True))
+@click.option(
+    "-pi", "--platform-index", default = 0,
+    help = "Index of platform to use"
+)
+@click.argument(
+    "filename",
+    type = click.Path(exists = True)
+)
+@click.argument(
+    "kernel"
+)
+@click.argument(
+    "arguments",
+    nargs = -1,
+    required = 1
+)
+def benchmark_kernel(platform_index, filename, kernel, arguments):
+    """
+    Load the OpenCL program in FILENAME and run KERNEL with specified
+    ARGUMENTS
+    """
+    from myopencl import so
+    ctx = Context.from_indexes(platform_index, 0)
+    paths = [Path(filename)]
+    ctx.register_program("main", paths, "")
+    props = [
+        cl.CommandQueueInfo.CL_QUEUE_PROPERTIES,
+        cl.CommandQueueProperties.CL_QUEUE_PROFILING_ENABLE
+    ]
+    ctx.register_queue("main", props)
+
+    rw_flag = cl.MemFlags.CL_MEM_READ_WRITE
+    cl_args = []
+    for i, arg in enumerate(arguments):
+        pf, val = arg.split(":")
+        if pf == "buf":
+            n_bytes = int(float(val))
+            ctx.register_buffer(i, n_bytes, rw_flag)
+            cl_args.append(i)
+        elif pf == "uint":
+            cl_args.append((cl.cl_uint, int(float(val))))
+        else:
+            assert False
+    ev = ctx.run_kernel("main", "main", kernel, [1], None, cl_args)
+    cl.wait_for_events([ev])
+    attr_start = cl.ProfilingInfo.CL_PROFILING_COMMAND_START
+    attr_end = cl.ProfilingInfo.CL_PROFILING_COMMAND_END
+    start = cl.get_info(attr_start, ev)
+    end = cl.get_info(attr_end, ev)
+    secs = (end - start) * 1.0e-6
+    print("%8.2f ms" % secs)
+    ctx.finish_and_release()
 
 def main():
     cli(obj={})
