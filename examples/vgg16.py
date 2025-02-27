@@ -5,6 +5,7 @@
 # Run using:
 #
 #   python examples/vgg16.py vgg16-full.pth kernels/ops/*.cl --sa-dims 16 4 8
+from collections import defaultdict
 from math import ceil, prod
 from myopencl.objs import Context
 from numpy.lib.stride_tricks import as_strided
@@ -327,26 +328,40 @@ def cl_run(
     ev = read_np_arr(ctx, 0, src, y)
     cl.wait_for_events([ev])
 
+    log2 = []
+    total = 0
+    tally = defaultdict(float)
     attr_start = cl.ProfilingInfo.CL_PROFILING_COMMAND_START
     attr_end = cl.ProfilingInfo.CL_PROFILING_COMMAND_END
     for i, j, kname, args, ev in log:
         start = cl.get_info(attr_start, ev)
         end = cl.get_info(attr_end, ev)
         secs = (end - start) * 1.0e-9
-
-        args = " ".join("%7d" % a for a in args if type(a) == int)
-        print("%2d %2d %-15s %-65s %8.3f" % (i, j, kname, args, secs))
-
-    print("%-54s: %8.4f" % ("total", took))
-    print()
+        int_args = [a for a in args if type(a) == int]
+        log2.append((i, j, kname, int_args, secs))
+        tally[kname] += secs
+        if j == 0:
+            total += secs
     ctx.finish_and_release()
+
+    for i, j, kname, int_args, secs in log2:
+        args = " ".join("%7d" % a for a in int_args)
+        print("%2d %2d %-15s %-65s %8.3f" % (i, j, kname, args, secs))
+    print()
+    for kname, tot in tally.items():
+        print("%-15s %8.3f" % (kname, tot))
+    print("%-15s %8.3f" % ("total", total))
+    print()
+    print("%-10s: %8.4f" % ("total", took))
+    print()
+
     return y
 
-def load_cifar100_net(path):
+def load_cifar100_net(path, bs):
     net = torch.load(path, weights_only = False)
 
     # And test data
-    l_te, names = load_cifar_test(Path("/tmp/data"), 32, 100)
+    l_te, names = load_cifar_test(Path("/tmp/data"), bs, 100)
     x, _ = next(iter(l_te))
     x = x.numpy()
     if len(x.shape) == 4:
@@ -366,6 +381,11 @@ def load_cifar100_net(path):
     nargs = 3,
     help = "Systolic array dimensions (V_SIZE, PE_S, X_SCALE)"
 )
+@click.option(
+    "-bs", "--batch-size",
+    default = 64,
+    help = "Batch size"
+)
 @click.argument(
     "network",
     type = click.Path(exists = True),
@@ -376,9 +396,9 @@ def load_cifar100_net(path):
     required = 1,
     type = click.Path(exists = True),
 )
-def main(platform_index, sa_dims, network, source):
+def main(platform_index, sa_dims, batch_size, network, source):
     """Loads a PyTorch network and runs inteference on it for one batch."""
-    net, x = load_cifar100_net(network)
+    net, x = load_cifar100_net(network, batch_size)
 
     # Run on torch
     with torch.no_grad():
