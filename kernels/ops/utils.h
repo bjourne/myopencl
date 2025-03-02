@@ -1,6 +1,14 @@
 #ifndef __UTILS_H__
 #define __UTILS_H__
 
+#define DEBUG 0
+#if DEBUG==1
+#define ASSERT(cond)                if (!(cond)) { printf("Cond: %s failed!\n", #cond); }
+#else
+#define ASSERT(cond)
+#endif
+
+#define ALIGN_TO(i, d)          (((i) + (d - 1)) / d)
 #define MAX(a, b)       ((a) > (b) ? (a) : (b))
 
 #define IDX2D(ad, bd, a, b) ((a) * (bd) + (b))
