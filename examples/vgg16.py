@@ -24,6 +24,9 @@ import myopencl as cl
 import numpy as np
 import torch
 
+# Number of channels must be divisible by this
+CHAN_CHUNK = 16
+
 ########################################################################
 # NumPy code
 ########################################################################
@@ -57,6 +60,20 @@ def tile(x, win, step, axis):
 
 def tile_matrix(mat, ts_y, ts_x):
     return tile(mat, (ts_y, ts_x), (ts_y, ts_x), (0, 1))
+
+def compute_blocks(shape, defs):
+    adds = []
+    counts = []
+    for size_n, (blk, n_min) in zip(shape, defs):
+        n_blocks = max(ceil(size_n / blk), n_min)
+        add = n_blocks * blk - size_n
+        adds.append((0, add))
+        counts.append(n_blocks)
+    return adds, counts
+
+def pad_blocked(mat, defs):
+    adds, _ = compute_blocks(mat.shape, defs)
+    return np.pad(mat, adds)
 
 ########################################################################
 # Torch code
@@ -133,19 +150,11 @@ def schedule_sa_matmul(mat_w, size_n, size_m, size_k, sa_dims):
     blk_m = x_scale * v_size
     blk_k = pe_s ** 2
 
-    n_blocks = ceil(size_n / blk_n)
-    m_blocks = max(ceil(size_m / blk_m), 3)
-    k_blocks = ceil(size_k / blk_k)
+    shape = [size_n, size_k, size_m]
+    defs = [(blk_n, 0), (blk_k, 0), (blk_m, 3)]
+    adds, [n_blocks, k_blocks, m_blocks] = compute_blocks(shape, defs)
 
-    pad_n = n_blocks * blk_n
-    pad_m = m_blocks * blk_m
-    pad_k = k_blocks * blk_k
-
-    add_n = pad_n - size_n
-    add_m = pad_m - size_m
-    add_k = pad_k - size_k
-
-    mat_w = np.pad(mat_w, [(0, add_k), (0, add_m)])
+    mat_w = np.pad(mat_w, adds[1:])
     mat_w = np.ascontiguousarray(tile_matrix(mat_w, blk_k, blk_m))
     assert mat_w.dtype == np.float32
 
@@ -159,34 +168,64 @@ def schedule_sa_matmul(mat_w, size_n, size_m, size_k, sa_dims):
     ], [size_n, size_k]
 
 def conv2d_to_cl(mod, x_shape, sa_dims):
-    assert not mod.bias
+    assert x_shape[-1] % CHAN_CHUNK == 0
+    assert mod.bias is None
+
     w = mod.weight.numpy()
-    oc_dim, ic_dim, k_size, k_size = w.shape
+    w = pad_blocked(w, [
+        (CHAN_CHUNK, 0),
+        (CHAN_CHUNK, 0),
+        (1, 0),
+        (1, 0)
+    ])
+
+    oc_dim, ic_dim, k_dim, k_dim = w.shape
+
+    assert ic_dim % CHAN_CHUNK == 0
+    assert oc_dim % CHAN_CHUNK == 0
 
     pad = mod.padding[0]
-    n_dim, iy_dim, ix_dim, ic_dim = x_shape
-    oy_dim = iy_dim + 2 * pad - k_size + 1
-    ox_dim = ix_dim + 2 * pad - k_size + 1
+    bs_dim, iy_dim, ix_dim, ic_dim = x_shape
+    oy_dim = iy_dim + 2 * pad - k_dim + 1
+    ox_dim = ix_dim + 2 * pad - k_dim + 1
 
-    tasks = []
-    args = [
-        "src", "dst",
-        n_dim,
-        iy_dim, ix_dim, ic_dim,
-        k_size,
-        pad
-    ]
-    tasks.append([("conv2d_im2col", args)])
-
-    size_n = n_dim * oy_dim * ox_dim
-    size_m = k_size * k_size * ic_dim
+    size_n = bs_dim * oy_dim * ox_dim
+    size_m = k_dim * k_dim * ic_dim
     size_k = oc_dim
 
     w = w.transpose(0, 2, 3, 1)
     w = np.ascontiguousarray(w)
     w = w.reshape(size_k, size_m)
-    tasks2, _ = schedule_sa_matmul(w, size_n, size_m, size_k, sa_dims)
-    return tasks + tasks2, [n_dim, oy_dim, ox_dim, oc_dim]
+
+    # Compute block dimensions
+    v_size, pe_s, x_scale = sa_dims
+    blk_n = pe_s ** 2
+    blk_m = x_scale * v_size
+    blk_k = pe_s ** 2
+
+    shape = [size_n, size_k, size_m]
+    defs = [(blk_n, 0), (blk_k, 0), (blk_m, 3)]
+    adds, [n_blocks, k_blocks, m_blocks] = compute_blocks(shape, defs)
+
+    w = np.pad(w, adds[1:])
+    w = np.ascontiguousarray(tile_matrix(w, blk_k, blk_m))
+    assert w.dtype == np.float32
+
+    return [
+        [
+            ("im2col_and_tile_load", ["src", bs_dim, iy_dim, ix_dim, ic_dim, k_dim, pad]),
+            ("im2col_and_tile_store", ["dst", size_n, size_m])
+        ],
+        # [("im2col_and_tile", [
+        #     "src", "dst", bs_dim, iy_dim, ix_dim, ic_dim, k_dim, pad
+        # ])],
+        [("load_a", ["src", n_blocks, m_blocks, k_blocks]),
+         ("load_b", [w, n_blocks, m_blocks, k_blocks]),
+         ("store", ["dst", n_blocks, m_blocks, k_blocks])
+         ],
+        [("postproc_c", ["src", "dst", size_n, size_k, n_blocks, k_blocks])]
+    ], [bs_dim, oy_dim, ox_dim, oc_dim]
+
 
 def linear_to_cl(mod, x_shape, sa_dims):
     w = mod.weight.numpy()
@@ -223,7 +262,7 @@ def max_pool2d_to_cl(mod, x_shape, sa_dims):
         [("max_pool2d", ["src", "dst"] + list(x_shape) + [2])]
     ], y_shape
 
-def sequential_to_cl(mod, x_shape, sa_dims):
+def identity_to_cl(mod, x_shape, sa_dims):
     return [], x_shape
 
 def relu_to_cl(mod, x_shape, sa_dims):
@@ -241,8 +280,12 @@ def torch_to_cl_net(net, x_shape, sa_dims):
         Linear : linear_to_cl,
         MaxPool2d : max_pool2d_to_cl,
         ReLU : relu_to_cl,
-        Sequential : sequential_to_cl
+        Sequential : identity_to_cl
     }
+    x_shape = list(x_shape)
+    if len(x_shape) == 4:
+        x_shape[-1] = ceil(x_shape[-1] / CHAN_CHUNK) * CHAN_CHUNK
+
     tasks = []
     for m in net.modules():
         tp = type(m)
@@ -300,13 +343,15 @@ def cl_run(
 
     for i, invocations in enumerate(cl_net):
         for j, (kname, args) in enumerate(invocations):
-
             for k, arg in enumerate(args):
                 if type(arg) == np.ndarray:
                     key = i, j, k
                     create_and_write_np_arr(ctx, 0, (i, j, k), arg)
 
     # Write initial input
+    x = pad_blocked(x, [(1, 0), (1, 0), (1, 0), (CHAN_CHUNK, 0)])
+    assert(x.shape[-1] == CHAN_CHUNK)
+
     ev = write_np_arr(ctx, 0, "src", x)
     cl.wait_for_events([ev])
     src, dst = "src", "dst"
@@ -346,10 +391,10 @@ def cl_run(
 
     for i, j, kname, int_args, secs in log2:
         args = " ".join("%7d" % a for a in int_args)
-        print("%2d %2d %-15s %-65s %8.3f" % (i, j, kname, args, secs))
+        print("%2d %2d %-21s %-65s %8.3f" % (i, j, kname, args, secs))
     print()
     for kname, tot in tally.items():
-        print("%-15s %8.3f" % (kname, tot))
+        print("%-22s %8.3f" % (kname, tot))
     print("%-15s %8.3f" % ("total", total))
     print()
     print("%-10s: %8.4f" % ("total", took))
@@ -359,7 +404,6 @@ def cl_run(
 
 def load_cifar100_net(path, bs):
     net = torch.load(path, weights_only = False)
-
     # And test data
     l_te, names = load_cifar_test(Path("/tmp/data"), bs, 100)
     x, _ = next(iter(l_te))
@@ -406,7 +450,7 @@ def main(platform_index, sa_dims, batch_size, network, source):
         torch_run(net, x)
         net.eval()
         y_torch = torch_run(net, x)
-        cl_net, y_shape = torch_to_cl_net(net, list(x.shape), sa_dims)
+        cl_net, y_shape = torch_to_cl_net(net, x.shape, sa_dims)
 
     source = [Path(s) for s in source]
     y_cl = cl_run(
