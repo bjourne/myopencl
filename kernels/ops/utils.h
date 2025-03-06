@@ -9,7 +9,8 @@
 #endif
 
 #define ALIGN_TO(i, d)          (((i) + (d - 1)) / d)
-#define MAX(a, b)       ((a) > (b) ? (a) : (b))
+#define MAX(a, b)               ((a) > (b) ? (a) : (b))
+#define MAYBE_RELU(v, relu)     ((relu) ? MAX((v), 0) : (v))
 
 #define IDX2D(ad, bd, a, b) ((a) * (bd) + (b))
 #define IDX3D(ad, bd, cd, a, b, c) ((a) * (bd) * (cd) + (b) * (cd) + (c))
@@ -28,5 +29,7 @@
      (d) * (ed) * (fd) +                                \
      (e) * (fd) +                                       \
      (f))
+
+
 
 #endif

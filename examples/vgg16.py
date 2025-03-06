@@ -25,7 +25,7 @@ import numpy as np
 import torch
 
 # Number of channels must be divisible by this
-CHAN_CHUNK = 16
+CHAN_ALIGN = 16
 
 ########################################################################
 # NumPy code
@@ -134,8 +134,6 @@ def read_np_arr(ctx, qname, bname, x):
     return ctx.read_buffer(qname, bname, x.nbytes, ptr)
 
 def run_kernel(ctx, qname, kname, params):
-    params = [(cl.cl_uint, p) if type(p) == int else p
-              for p in params]
     return ctx.run_kernel(qname, "main", kname, [1], None, params)
 
 ########################################################################
@@ -168,21 +166,21 @@ def schedule_sa_matmul(mat_w, size_n, size_m, size_k, sa_dims):
     ], [size_n, size_k]
 
 def conv2d_to_cl(mod, x_shape, sa_dims):
-    assert x_shape[-1] % CHAN_CHUNK == 0
+    assert x_shape[-1] % CHAN_ALIGN == 0
     assert mod.bias is None
 
     w = mod.weight.numpy()
     w = pad_blocked(w, [
-        (CHAN_CHUNK, 0),
-        (CHAN_CHUNK, 0),
+        (CHAN_ALIGN, 0),
+        (CHAN_ALIGN, 0),
         (1, 0),
         (1, 0)
     ])
 
     oc_dim, ic_dim, k_dim, k_dim = w.shape
 
-    assert ic_dim % CHAN_CHUNK == 0
-    assert oc_dim % CHAN_CHUNK == 0
+    assert ic_dim % CHAN_ALIGN == 0
+    assert oc_dim % CHAN_ALIGN == 0
 
     pad = mod.padding[0]
     bs_dim, iy_dim, ix_dim, ic_dim = x_shape
@@ -212,13 +210,9 @@ def conv2d_to_cl(mod, x_shape, sa_dims):
     assert w.dtype == np.float32
 
     return [
-        [
-            ("im2col_and_tile_load", ["src", bs_dim, iy_dim, ix_dim, ic_dim, k_dim, pad]),
-            ("im2col_and_tile_store", ["dst", size_n, size_m])
-        ],
-        # [("im2col_and_tile", [
-        #     "src", "dst", bs_dim, iy_dim, ix_dim, ic_dim, k_dim, pad
-        # ])],
+        [("im2col_and_tile", [
+            "src", "dst", bs_dim, iy_dim, ix_dim, ic_dim, k_dim, pad
+        ])],
         [("load_a", ["src", n_blocks, m_blocks, k_blocks]),
          ("load_b", [w, n_blocks, m_blocks, k_blocks]),
          ("store", ["dst", n_blocks, m_blocks, k_blocks])
@@ -227,7 +221,7 @@ def conv2d_to_cl(mod, x_shape, sa_dims):
     ], [bs_dim, oy_dim, ox_dim, oc_dim]
 
 
-def linear_to_cl(mod, x_shape, sa_dims):
+def linear_to_cl(mod, x_shape, sa_dims, relu):
     w = mod.weight.numpy()
     b = mod.bias.numpy()
 
@@ -238,19 +232,31 @@ def linear_to_cl(mod, x_shape, sa_dims):
 
     tasks, x_shape = schedule_sa_matmul(w, size_n, size_m, size_k, sa_dims)
     tasks.append(
-        [("linear_bias", ["src", "dst", b] + x_shape)]
+        [("linear_bias", ["src", "dst", b] + x_shape + [relu])]
     )
     return tasks, x_shape
 
-def batch_norm2d_to_cl(mod, x_shape, sa_dims):
+def linear_to_cl_no_relu(mod, x_shape, sa_dims):
+    return linear_to_cl(mod, x_shape, sa_dims, 0)
+
+def linear_to_cl_yes_relu(mod, x_shape, sa_dims):
+    return linear_to_cl(mod.linear, x_shape, sa_dims, 1)
+
+def batch_norm2d_to_cl(mod, x_shape, sa_dims, relu):
     buffers = mod.running_mean, mod.running_var, mod.weight, mod.bias
     mean, var, weight, bias = [b.numpy() for b in buffers]
     mul = weight / np.sqrt(var + 1e-5)
     add = -mean * mul + bias
     dims = [prod(x_shape[:-1]), x_shape[-1]]
     return [
-        [("batch_norm2d", ["src", "dst", mul, add] + dims)]
+        [("batch_norm2d", ["src", "dst", mul, add] + dims + [relu])]
     ], x_shape
+
+def batch_norm2d_to_cl_no_relu(mod, x_shape, sa_dims):
+    return batch_norm2d_to_cl(mod, x_shape, sa_dims, 0)
+
+def batch_norm2d_to_cl_yes_relu(mod, x_shape, sa_dims):
+    return batch_norm2d_to_cl(mod.bn, x_shape, sa_dims, 1)
 
 def flatten_to_cl(mod, x_shape, sa_dims):
     return [], (x_shape[0], prod(x_shape[1:]))
@@ -270,24 +276,47 @@ def relu_to_cl(mod, x_shape, sa_dims):
         [("relu", ["src", "dst", prod(x_shape)])]
     ], x_shape
 
+class BatchNorm2dWithReLU:
+    def __init__(self, bn):
+        self.bn = bn
+
+class LinearWithReLU:
+    def __init__(self, linear):
+        self.linear = linear
+
 # Converts params to NumPy. Every layer has type, scalar params, and
 # buffer params.
 def torch_to_cl_net(net, x_shape, sa_dims):
+    modules = list(net.modules())
+    fused_modules = []
+    last_tp = None
+    for m in modules:
+        tp = type(m)
+        if tp == ReLU and last_tp == BatchNorm2d:
+            fused_modules[-1] = BatchNorm2dWithReLU(fused_modules[-1])
+        elif tp == ReLU and last_tp == Linear:
+            fused_modules[-1] = LinearWithReLU(fused_modules[-1])
+        else:
+            fused_modules.append(m)
+        last_tp = tp
+
     handlers = {
-        BatchNorm2d: batch_norm2d_to_cl,
+        BatchNorm2d: batch_norm2d_to_cl_no_relu,
+        BatchNorm2dWithReLU: batch_norm2d_to_cl_yes_relu,
         Conv2d : conv2d_to_cl,
         Flatten : flatten_to_cl,
-        Linear : linear_to_cl,
+        Linear : linear_to_cl_no_relu,
+        LinearWithReLU : linear_to_cl_yes_relu,
         MaxPool2d : max_pool2d_to_cl,
         ReLU : relu_to_cl,
         Sequential : identity_to_cl
     }
     x_shape = list(x_shape)
     if len(x_shape) == 4:
-        x_shape[-1] = ceil(x_shape[-1] / CHAN_CHUNK) * CHAN_CHUNK
+        x_shape[-1] = ceil(x_shape[-1] / CHAN_ALIGN) * CHAN_ALIGN
 
     tasks = []
-    for m in net.modules():
+    for m in fused_modules:
         tp = type(m)
         tasks2, x_shape = handlers[tp](m, x_shape, sa_dims)
         tasks.extend(tasks2)
@@ -349,8 +378,8 @@ def cl_run(
                     create_and_write_np_arr(ctx, 0, (i, j, k), arg)
 
     # Write initial input
-    x = pad_blocked(x, [(1, 0), (1, 0), (1, 0), (CHAN_CHUNK, 0)])
-    assert(x.shape[-1] == CHAN_CHUNK)
+    x = pad_blocked(x, [(1, 0), (1, 0), (1, 0), (CHAN_ALIGN, 0)])
+    assert(x.shape[-1] == CHAN_ALIGN)
 
     ev = write_np_arr(ctx, 0, "src", x)
     cl.wait_for_events([ev])
@@ -390,7 +419,7 @@ def cl_run(
     ctx.finish_and_release()
 
     for i, j, kname, int_args, secs in log2:
-        args = " ".join("%7d" % a for a in int_args)
+        args = " ".join("%7s" % a for a in int_args)
         print("%2d %2d %-21s %-65s %8.3f" % (i, j, kname, args, secs))
     print()
     for kname, tot in tally.items():
