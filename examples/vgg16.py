@@ -99,12 +99,12 @@ def load_cifar_test(data_dir, batch_size, n_cls):
 
 def torch_run(net, x):
     # Torch wants (N, C, Y, X) tensors
-    if len(x.shape) == 4:
+    if x.ndim == 4:
         x = x.transpose(0, 3, 1, 2)
     x = torch.from_numpy(x)
     y = net(x)
     y = y.numpy()
-    if len(y.shape) == 4:
+    if y.ndim == 4:
         y = y.transpose(0, 2, 3, 1)
     return y
 
@@ -223,17 +223,20 @@ def conv2d_to_cl(mod, x_shape, sa_dims):
 
 def linear_to_cl(mod, x_shape, sa_dims, relu):
     w = mod.weight.numpy()
-    b = mod.bias.numpy()
-
     size_n, size_m = x_shape
     size_k, by = w.shape
     assert by == size_m
-    assert len(b) == size_k
+
 
     tasks, x_shape = schedule_sa_matmul(w, size_n, size_m, size_k, sa_dims)
-    tasks.append(
-        [("linear_bias", ["src", "dst", b] + x_shape + [relu])]
-    )
+
+    b = mod.bias
+    if b is not None:
+        b = b.numpy()
+        assert len(b) == size_k
+        tasks.append(
+            [("linear_bias", ["src", "dst", b] + x_shape + [relu])]
+        )
     return tasks, x_shape
 
 def linear_to_cl_no_relu(mod, x_shape, sa_dims):
@@ -374,12 +377,12 @@ def cl_run(
         for j, (kname, args) in enumerate(invocations):
             for k, arg in enumerate(args):
                 if type(arg) == np.ndarray:
-                    key = i, j, k
                     create_and_write_np_arr(ctx, 0, (i, j, k), arg)
 
     # Write initial input
-    x = pad_blocked(x, [(1, 0), (1, 0), (1, 0), (CHAN_ALIGN, 0)])
-    assert(x.shape[-1] == CHAN_ALIGN)
+    if x.ndim == 4:
+        x = pad_blocked(x, [(1, 0), (1, 0), (1, 0), (CHAN_ALIGN, 0)])
+        assert(x.shape[-1] == CHAN_ALIGN)
 
     ev = write_np_arr(ctx, 0, "src", x)
     cl.wait_for_events([ev])
@@ -486,7 +489,6 @@ def main(platform_index, sa_dims, batch_size, network, source):
         cl_net, y_shape, x, source,
         platform_index, sa_dims
     )
-
     print("cl/torch diff  :", np.sum(np.abs(y_cl - y_torch)))
 
     # Compare
