@@ -8,6 +8,10 @@
 #define ASSERT(cond)
 #endif
 
+#define CHAN_ALIGN              16
+typedef float16                 chan_vfloat;
+#define N_CHAN_VFLOAT_MAX       (1024 / CHAN_ALIGN)
+
 #define ALIGN_TO(i, d)          (((i) + (d - 1)) / d)
 #define MAX(a, b)               ((a) > (b) ? (a) : (b))
 #define MAYBE_RELU(v, relu)     ((relu) ? MAX((v), 0) : (v))
