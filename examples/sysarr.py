@@ -7,22 +7,41 @@ from numpy.lib.stride_tricks import as_strided
 from pathlib import Path
 from sys import argv
 
+import click
 import myopencl as cl
 import numpy as np
+
+np.set_printoptions(
+    precision=8,
+    linewidth=200,
+    threshold=5000,
+    suppress=True
+)
 
 ########################################################################
 # OpenCL code
 ########################################################################
+def arr_cptr(arr):
+    assert arr.flags["C_CONTIGUOUS"]
+    assert arr.data.contiguous
+    if arr.dtype == np.float16:
+        arr.dtype = np.int16
+        ptr = np.ctypeslib.as_ctypes(arr)
+        arr.dtype = np.float16
+    else:
+        ptr = np.ctypeslib.as_ctypes(arr)
+    return ptr
+
 def write_np_arr(ctx, qname, bname, x):
-    assert x.flags["C_CONTIGUOUS"]
-    assert x.data.contiguous
-    ptr = np.ctypeslib.as_ctypes(x)
+    ptr = arr_cptr(x)
     nbytes = x.nbytes
     return ctx.write_buffer(qname, bname, nbytes, ptr)
 
 def read_np_arr(ctx, qname, bname, x):
-    ptr = np.ctypeslib.as_ctypes(x)
-    ev = ctx.read_buffer(qname, bname, x.nbytes, ptr)
+    nbytes = x.nbytes
+    print("Reading array %s containing %d bytes" % (bname, nbytes))
+    ptr = arr_cptr(x)
+    ev = ctx.read_buffer(qname, bname, nbytes, ptr)
     cl.wait_for_events([ev])
 
 def run_sd_kernel(ctx, qname, kname, params):
@@ -30,21 +49,17 @@ def run_sd_kernel(ctx, qname, kname, params):
               for p in params]
     return ctx.run_kernel(qname, "main", kname, [1], None, params)
 
-V_SIZE = 8
-PE_S = 16
-X_SCALE = 8
-TYPE_SEL = 1
-
 def format_build_opts(*args, **kw):
     defs = [f"-D {k}={v}" for (k, v) in kw.items()]
     return " ".join(list(args) + defs)
 
-def cl_matmul(ctx, mat_a, mat_b):
+def cl_matmul(ctx, mat_a, mat_b, sa_dims):
     assert mat_a.dtype == mat_b.dtype
 
-    block_n = PE_S ** 2
-    block_m = X_SCALE * V_SIZE
-    block_k = PE_S ** 2
+    _, v_size, pe_s, x_scale = sa_dims
+    block_n = pe_s ** 2
+    block_m = x_scale * v_size
+    block_k = pe_s ** 2
 
     size_n, size_m = mat_a.shape
     by, size_k = mat_b.shape
@@ -81,11 +96,13 @@ def cl_matmul(ctx, mat_a, mat_b):
         ("store", "postproc_c", postproc_args)
     ]
 
+    print("Running kernels...")
     evs = []
     for qname, kname, args in tasks:
         ev = run_sd_kernel(ctx, qname, kname, args)
         evs.append(ev)
     cl.wait_for_events(evs)
+    print("Done..")
 
     attr_start = cl.ProfilingInfo.CL_PROFILING_COMMAND_START
     attr_end = cl.ProfilingInfo.CL_PROFILING_COMMAND_END
@@ -99,26 +116,66 @@ def cl_matmul(ctx, mat_a, mat_b):
 
     c_mat = np.empty((size_n, size_k), dtype = mat_a.dtype)
     read_np_arr(ctx, "store", "mat_c", c_mat)
+
     return c_mat
 
-def main():
-    # Setup OpenCL context
-    path = Path(argv[1])
-    plat_idx = int(argv[2])
+def generate_inputs(v_type):
+    scale = 10
+    dims = [100 + scale * np.random.randint(50) for _ in range(3)]
+    size_n, size_m, size_k = dims
+    if v_type in {1, 3}:
+        mat_a = np.random.randint(-10, 10, size = (size_n, size_m))
+        mat_b = np.random.randint(-10, 10, size = (size_m, size_k))
+    elif v_type in {2, 4}:
+        mat_a = np.random.randn(size_n, size_m)
+        mat_b = np.random.randn(size_m, size_k)
+    else:
+        assert False
+    tp = V_TYPE_TO_NP[v_type]
+    mat_a = mat_a.astype(tp)
+    mat_b = mat_b.astype(tp)
+    return mat_a, mat_b
 
-    ctx = Context.from_indexes(plat_idx, 0)
+V_TYPE_TO_NP = {
+    1 : np.int64,
+    2 : np.float32,
+    3 : np.int32,
+    4 : np.float16
+}
+
+@click.command(context_settings={'show_default': True})
+@click.option(
+    "-pi", "--platform-index",
+    default = 0,
+    help = "Index of platform to use"
+)
+@click.option(
+    "--sa-dims",
+    default = (2, 8, 16, 8),
+    nargs = 4,
+    help = "Systolic array dimensions (V_TYPE, V_SIZE, PE_S, X_SCALE)"
+)
+@click.argument(
+    "source",
+    nargs = -1,
+    required = 1,
+    type = click.Path(exists = True),
+)
+def main(platform_index, sa_dims, source):
+    ctx = Context.from_indexes(platform_index, 0)
+    v_type, v_size, pe_s, x_scale = sa_dims
     opts = format_build_opts(
         "-cl-std=CL2.0",
         "-cl-fast-relaxed-math",
         "-cl-mad-enable",
-        "-Werror",
         INCLUDE_PP = 1,
-        TYPE_SEL = 1,
-        PE_S = PE_S,
-        X_SCALE = X_SCALE,
-        V_SIZE = V_SIZE
+        V_TYPE = v_type,
+        V_SIZE = v_size,
+        PE_S = pe_s,
+        X_SCALE = x_scale,
     )
-    ctx.register_program("main", path, opts)
+    source = [Path(s) for s in source]
+    ctx.register_program("main", source, opts)
 
     # Register queues and buffers
     props = [
@@ -141,28 +198,12 @@ def main():
 
     n_trials = 5
     tot_err = 0
-    for _ in range(n_trials):
-        dims = [100 + 10 * np.random.randint(50) for _ in range(3)]
-        size_n, size_m, size_k = dims
-        if TYPE_SEL == 1:
-            mat_a = np.random.randint(-10, 10, size = (size_n, size_m))
-            mat_b = np.random.randint(-10, 10, size = (size_m, size_k))
-            mat_a = mat_a.astype(np.int64)
-            mat_b = mat_b.astype(np.int64)
-        elif TYPE_SEL == 2:
-            mat_a = np.random.randn(size_n, size_m)
-            mat_b = np.random.randn(size_m, size_k)
-            mat_a = mat_a.astype(np.float32)
-            mat_b = mat_b.astype(np.float32)
-        elif TYPE_SEL == 3:
-            mat_a = np.random.randint(-10, 10, size = (size_n, size_m))
-            mat_b = np.random.randint(-10, 10, size = (size_m, size_k))
-            mat_a = mat_a.astype(np.int32)
-            mat_b = mat_b.astype(np.int32)
-
+    print("Running %d trials.." % n_trials)
+    for i in range(n_trials):
+        mat_a, mat_b = generate_inputs(v_type)
         mat_c = mat_a @ mat_b
-        cl_mat_c = cl_matmul(ctx, mat_a, mat_b)
-        err = np.sum(np.abs(mat_c - cl_mat_c))
+        cl_mat_c = cl_matmul(ctx, mat_a, mat_b, sa_dims)
+        err = np.mean(np.abs(mat_c - cl_mat_c))
         tot_err += err
     ctx.finish_and_release()
     mean_err = tot_err / n_trials
