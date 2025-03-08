@@ -23,15 +23,13 @@ im2col_and_tile(
     global float * restrict Y,
     uint bs_dim,
     uint iy_dim, uint ix_dim, uint c_dim,
-    uint k_dim,
-    uint pad
+    uint k_dim, uint pad, uint stride
 ) {
-
     ASSERT(BLOCK_M % CHAN_SIZE == 0);
     ASSERT(c_dim % CHAN_SIZE == 0);
 
-    uint oy_dim = iy_dim + 2 * pad - k_dim + 1;
-    uint ox_dim = ix_dim + 2 * pad - k_dim + 1;
+    uint oy_dim = WIN_COUNT(iy_dim, k_dim, stride, pad);
+    uint ox_dim = WIN_COUNT(ix_dim, k_dim, stride, pad);
 
     // Not padded
     uint n_dim = bs_dim * iy_dim * ix_dim;
@@ -60,8 +58,8 @@ im2col_and_tile(
                     for (uint fx = 0; fx < k_dim; fx++) {
 #pragma ivdep
                         for (uint c = 0; c < c_dim_chunks; c++) {
-                            int iy = oy + fy - pad;
-                            int ix = ox + fx - pad;
+                            int iy = stride * oy + fy - pad;
+                            int ix = stride * ox + fx - pad;
                             float v[CHAN_SIZE] = {0};
                             if (
                                 0 <= iy && iy < iy_dim &&

@@ -139,6 +139,18 @@ def run_kernel(ctx, qname, kname, params):
 ########################################################################
 # OpenCL layer handling
 ########################################################################
+def adaptive_avg_pool2d_to_cl(mod, x_shape, sa_dims):
+    bs_dim, iy_dim, ix_dim, ic_dim = x_shape
+    o_dim = mod.output_size
+    y_shape = bs_dim, o_dim, o_dim, ic_dim
+    return [
+        [("adaptive_avg_pool2d", [
+            "src", "dst",
+            bs_dim, iy_dim, ix_dim, ic_dim,
+            o_dim
+        ])]
+    ], y_shape
+
 def schedule_sa_matmul(mat_w, size_n, size_m, size_k, sa_dims):
     assert mat_w.size == size_m * size_k
 
@@ -167,8 +179,6 @@ def schedule_sa_matmul(mat_w, size_n, size_m, size_k, sa_dims):
 
 def conv2d_to_cl(mod, x_shape, sa_dims):
     assert x_shape[-1] % CHAN_ALIGN == 0
-    assert mod.bias is None
-
     w = mod.weight.numpy()
     w = pad_blocked(w, [
         (CHAN_ALIGN, 0),
@@ -183,9 +193,11 @@ def conv2d_to_cl(mod, x_shape, sa_dims):
     assert oc_dim % CHAN_ALIGN == 0
 
     pad = mod.padding[0]
+    stride = mod.stride[0]
+
     bs_dim, iy_dim, ix_dim, ic_dim = x_shape
-    oy_dim = iy_dim + 2 * pad - k_dim + 1
-    ox_dim = ix_dim + 2 * pad - k_dim + 1
+    oy_dim = (iy_dim + 2 * pad - k_dim) // stride + 1
+    ox_dim = (ix_dim + 2 * pad - k_dim) // stride + 1
 
     size_n = bs_dim * oy_dim * ox_dim
     size_m = k_dim * k_dim * ic_dim
@@ -209,31 +221,44 @@ def conv2d_to_cl(mod, x_shape, sa_dims):
     w = np.ascontiguousarray(tile_matrix(w, blk_k, blk_m))
     assert w.dtype == np.float32
 
-    return [
+    tasks = [
         [("im2col_and_tile", [
-            "src", "dst", bs_dim, iy_dim, ix_dim, ic_dim, k_dim, pad
+            "src", "dst",
+            bs_dim, iy_dim, ix_dim, ic_dim,
+            k_dim, pad, stride
         ])],
         [("load_a", ["src", n_blocks, m_blocks, k_blocks]),
          ("load_b", [w, n_blocks, m_blocks, k_blocks]),
          ("store", ["dst", n_blocks, m_blocks, k_blocks])
          ],
         [("postproc_c", ["src", "dst", size_n, size_k, n_blocks, k_blocks])]
-    ], [bs_dim, oy_dim, ox_dim, oc_dim]
+    ]
+
+    if mod.bias is not None:
+        b = mod.bias.numpy()
+        b = pad_blocked(b, [(CHAN_ALIGN, 0)])
+        tasks.append(
+            [("linear_bias", ["src", "dst", b, size_n, size_k, 0])]
+        )
+
+    return tasks, [bs_dim, oy_dim, ox_dim, oc_dim]
 
 
 def linear_to_cl(mod, x_shape, sa_dims, relu):
     w = mod.weight.numpy()
-    size_n, size_m = x_shape
-    size_k, by = w.shape
-    assert by == size_m
+    w = pad_blocked(w, [(CHAN_ALIGN, 0), (1, 0)])
+    n_dim, m_dim = x_shape
+    k_dim, bx = w.shape
+    assert bx == m_dim
 
 
-    tasks, x_shape = schedule_sa_matmul(w, size_n, size_m, size_k, sa_dims)
+    tasks, x_shape = schedule_sa_matmul(w, n_dim, m_dim, k_dim, sa_dims)
 
     b = mod.bias
     if b is not None:
         b = b.numpy()
-        assert len(b) == size_k
+        b = pad_blocked(b, [(CHAN_ALIGN, 0)])
+        assert len(b) == k_dim
         tasks.append(
             [("linear_bias", ["src", "dst", b] + x_shape + [relu])]
         )
@@ -265,10 +290,19 @@ def flatten_to_cl(mod, x_shape, sa_dims):
     return [], (x_shape[0], prod(x_shape[1:]))
 
 def max_pool2d_to_cl(mod, x_shape, sa_dims):
-    n_dim, iy_dim, ix_dim, ic_dim = x_shape
-    y_shape = n_dim, iy_dim // 2, ix_dim // 2, ic_dim
+    n_dim, iy_dim, ix_dim, c_dim = x_shape
+    k_dim = mod.kernel_size
+    stride = mod.stride
+
+    oy_dim = (iy_dim - k_dim) // stride + 1
+    ox_dim = (ix_dim - k_dim) // stride + 1
+    y_shape = n_dim, oy_dim, ox_dim, c_dim
     return [
-        [("max_pool2d", ["src", "dst"] + list(x_shape) + [2])]
+        [("max_pool2d", [
+            "src", "dst",
+            n_dim, iy_dim, ix_dim, c_dim,
+            k_dim, stride
+        ])]
     ], y_shape
 
 def identity_to_cl(mod, x_shape, sa_dims):
@@ -304,6 +338,7 @@ def torch_to_cl_net(net, x_shape, sa_dims):
         last_tp = tp
 
     handlers = {
+        AdaptiveAvgPool2d: adaptive_avg_pool2d_to_cl,
         BatchNorm2d: batch_norm2d_to_cl_no_relu,
         BatchNorm2dWithReLU: batch_norm2d_to_cl_yes_relu,
         Conv2d : conv2d_to_cl,
@@ -314,6 +349,10 @@ def torch_to_cl_net(net, x_shape, sa_dims):
         ReLU : relu_to_cl,
         Sequential : identity_to_cl
     }
+
+    # Temporary solution...
+    fused_modules = [fm for fm in fused_modules if type(fm) in handlers]
+
     x_shape = list(x_shape)
     if len(x_shape) == 4:
         x_shape[-1] = ceil(x_shape[-1] / CHAN_ALIGN) * CHAN_ALIGN
@@ -340,16 +379,15 @@ def map_args(src, dst, i, j, args):
             assert False
 
 def cl_run(
-        cl_net,
-        y_shape, x,
-        source, platform_index, sa_dims
+    cl_net,
+    y_shape, x,
+    source, platform_index, sa_dims
 ):
     v_size, pe_s, x_scale = sa_dims
     opts = format_build_opts(
         "-cl-std=CL2.0",
         "-cl-fast-relaxed-math",
         "-cl-mad-enable",
-        INCLUDE_PP = 1,
         TYPE_SEL = 2,
         V_SIZE = v_size,
         PE_S = pe_s,
@@ -361,10 +399,6 @@ def cl_run(
         cl.CommandQueueInfo.CL_QUEUE_PROPERTIES,
         cl.CommandQueueProperties.CL_QUEUE_PROFILING_ENABLE
     ]
-    ctx.register_queue("main", props)
-    ctx.register_queue("aux1", props)
-    ctx.register_queue("aux2", props)
-
     for i in range(4):
         ctx.register_queue(i, props)
 
@@ -379,7 +413,7 @@ def cl_run(
                 if type(arg) == np.ndarray:
                     create_and_write_np_arr(ctx, 0, (i, j, k), arg)
 
-    # Write initial input
+    # Pad and write initial input
     if x.ndim == 4:
         x = pad_blocked(x, [(1, 0), (1, 0), (1, 0), (CHAN_ALIGN, 0)])
         assert(x.shape[-1] == CHAN_ALIGN)
@@ -427,9 +461,9 @@ def cl_run(
     print()
     for kname, tot in tally.items():
         print("%-22s %8.3f" % (kname, tot))
-    print("%-15s %8.3f" % ("total", total))
+    print("%-22s %8.3f" % ("total", total))
     print()
-    print("%-10s: %8.4f" % ("total", took))
+    print("%-22s: %8.4f" % ("total", took))
     print()
 
     return y
@@ -489,11 +523,14 @@ def main(platform_index, sa_dims, batch_size, network, source):
         cl_net, y_shape, x, source,
         platform_index, sa_dims
     )
-    print("cl/torch diff  :", np.sum(np.abs(y_cl - y_torch)))
+
+    y_cl = y_cl[tuple(slice(None, e) for e in y_torch.shape)]
 
     # Compare
     assert y_torch.shape == y_cl.shape
     assert y_torch.dtype == y_cl.dtype
+
+    print("cl/torch diff  :", np.sum(np.abs(y_cl - y_torch)))
 
     pdiff = y_torch.argmax(axis = 1) - y_cl.argmax(axis = 1)
     print("pdiff", np.sum(pdiff))
