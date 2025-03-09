@@ -31,8 +31,8 @@ im2col_and_tile(
     uint oy_dim = WIN_COUNT(iy_dim, k_dim, stride, pad);
     uint ox_dim = WIN_COUNT(ix_dim, k_dim, stride, pad);
 
-    // Not padded
-    uint n_dim = bs_dim * iy_dim * ix_dim;
+    // Unpadded size of the output matrix
+    uint n_dim = bs_dim * oy_dim * ox_dim;
     uint m_dim = k_dim * k_dim * c_dim;
 
     uint n_blocks = ALIGN_TO(n_dim, BLOCK_N);
