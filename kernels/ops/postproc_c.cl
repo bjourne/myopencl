@@ -19,6 +19,7 @@ postproc_c(
     uint n_dim, uint k_dim,
     uint n_blocks, uint k_blocks
 ) {
+    ASSERT(k_dim % CHAN_ALIGN == 0);
     n_blocks = ALIGN_TO(n_dim, BLOCK_N);
     k_blocks = ALIGN_TO(k_dim, BLOCK_K);
 
@@ -29,13 +30,13 @@ postproc_c(
             uint src_base = IDX4D(
                 n_blocks, k_blocks, BLOCK_N, BLOCK_K,
                 n0, k0, n1, 0);
-            float tmp[PE_S][PE_S];
+            type tmp[PE_S][PE_S];
 #pragma unroll
             for (uint k1 = 0; k1 < PE_S; k1++) {
 #pragma unroll
                 for (uint k2 = 0; k2 < PE_S; k2++) {
-                    uint src_ofs = IDX2D(PE_S, PE_S, k1, k2);
-                    tmp[k2][k1] = LOAD(X, src_base + src_ofs);
+                    uint ofs = IDX2D(PE_S, PE_S, k1, k2);
+                    tmp[k2][k1] = LOAD(X, src_base + ofs);
                 }
             }
             uint dst_base = n * k_dim + BLOCK_K * k0;
@@ -43,8 +44,8 @@ postproc_c(
             for (uint k1 = 0; k1 < PE_S; k1++) {
 #pragma unroll
                 for (uint k2 = 0; k2 < PE_S; k2++) {
-                    uint dst_ofs = IDX2D(PE_S, PE_S, k1, k2);
-                    STORE(Y, dst_base + dst_ofs, tmp[k1][k2]);
+                    uint ofs = IDX2D(PE_S, PE_S, k1, k2);
+                    STORE(Y, dst_base + ofs, tmp[k1][k2]);
                 }
             }
         }

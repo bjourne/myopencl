@@ -33,7 +33,8 @@ adaptive_avg_pool2d(
                             sum += X[a];
                         }
                     }
-                    uint a = IDX4D(n_dim, o_dim, o_dim, c_dim, n, oy, ox, c);
+                    // Also transpose channels to make torch happy. Temp hack.
+                    uint a = IDX4D(n_dim, c_dim, o_dim, o_dim, n, c, oy, ox);
                     Y[a] = sum / cnt;
                 }
             }

@@ -26,10 +26,14 @@ import torch
 
 # Number of channels must be divisible by this
 CHAN_ALIGN = 16
+MAX_N_ELS = 256*1024**2
 
 ########################################################################
 # NumPy code
 ########################################################################
+def win_count(x, k, s, p):
+    return (x - k + 2 * p) // s + 1
+
 def tile(x, win, step, axis):
     assert x.flags["C_CONTIGUOUS"]
     assert x.data.contiguous
@@ -196,12 +200,15 @@ def conv2d_to_cl(mod, x_shape, sa_dims):
     stride = mod.stride[0]
 
     bs_dim, iy_dim, ix_dim, ic_dim = x_shape
-    oy_dim = (iy_dim + 2 * pad - k_dim) // stride + 1
-    ox_dim = (ix_dim + 2 * pad - k_dim) // stride + 1
+    oy_dim = win_count(iy_dim, k_dim, stride, pad)
+    ox_dim = win_count(ix_dim, k_dim, stride, pad)
 
     size_n = bs_dim * oy_dim * ox_dim
     size_m = k_dim * k_dim * ic_dim
     size_k = oc_dim
+
+    assert size_n * size_m < MAX_N_ELS
+    assert size_n * size_k < MAX_N_ELS
 
     w = w.transpose(0, 2, 3, 1)
     w = np.ascontiguousarray(w)
@@ -251,7 +258,6 @@ def linear_to_cl(mod, x_shape, sa_dims, relu):
     k_dim, bx = w.shape
     assert bx == m_dim
 
-
     tasks, x_shape = schedule_sa_matmul(w, n_dim, m_dim, k_dim, sa_dims)
 
     b = mod.bias
@@ -294,8 +300,8 @@ def max_pool2d_to_cl(mod, x_shape, sa_dims):
     k_dim = mod.kernel_size
     stride = mod.stride
 
-    oy_dim = (iy_dim - k_dim) // stride + 1
-    ox_dim = (ix_dim - k_dim) // stride + 1
+    oy_dim = win_count(iy_dim, k_dim, stride, 0)
+    ox_dim = win_count(ix_dim, k_dim, stride, 0)
     y_shape = n_dim, oy_dim, ox_dim, c_dim
     return [
         [("max_pool2d", [
@@ -321,6 +327,20 @@ class LinearWithReLU:
     def __init__(self, linear):
         self.linear = linear
 
+LAYER_HANDLERS = {
+    AdaptiveAvgPool2d: adaptive_avg_pool2d_to_cl,
+    BatchNorm2d: batch_norm2d_to_cl_no_relu,
+    BatchNorm2dWithReLU: batch_norm2d_to_cl_yes_relu,
+    Conv2d : conv2d_to_cl,
+    Flatten : flatten_to_cl,
+    Linear : linear_to_cl_no_relu,
+    LinearWithReLU : linear_to_cl_yes_relu,
+    MaxPool2d : max_pool2d_to_cl,
+    ReLU : relu_to_cl,
+    Sequential : identity_to_cl
+}
+
+
 # Converts params to NumPy. Every layer has type, scalar params, and
 # buffer params.
 def torch_to_cl_net(net, x_shape, sa_dims):
@@ -337,21 +357,8 @@ def torch_to_cl_net(net, x_shape, sa_dims):
             fused_modules.append(m)
         last_tp = tp
 
-    handlers = {
-        AdaptiveAvgPool2d: adaptive_avg_pool2d_to_cl,
-        BatchNorm2d: batch_norm2d_to_cl_no_relu,
-        BatchNorm2dWithReLU: batch_norm2d_to_cl_yes_relu,
-        Conv2d : conv2d_to_cl,
-        Flatten : flatten_to_cl,
-        Linear : linear_to_cl_no_relu,
-        LinearWithReLU : linear_to_cl_yes_relu,
-        MaxPool2d : max_pool2d_to_cl,
-        ReLU : relu_to_cl,
-        Sequential : identity_to_cl
-    }
-
     # Temporary solution...
-    fused_modules = [fm for fm in fused_modules if type(fm) in handlers]
+    fused_modules = [fm for fm in fused_modules if type(fm) in LAYER_HANDLERS]
 
     x_shape = list(x_shape)
     if len(x_shape) == 4:
@@ -359,8 +366,10 @@ def torch_to_cl_net(net, x_shape, sa_dims):
 
     tasks = []
     for m in fused_modules:
+        assert(prod(x_shape) < MAX_N_ELS)
         tp = type(m)
-        tasks2, x_shape = handlers[tp](m, x_shape, sa_dims)
+        fun = LAYER_HANDLERS[tp]
+        tasks2, x_shape = fun(m, x_shape, sa_dims)
         tasks.extend(tasks2)
     return tasks, x_shape
 
@@ -402,7 +411,7 @@ def cl_run(
     for i in range(4):
         ctx.register_queue(i, props)
 
-    buf_size = 512 * 1024**2
+    buf_size = 4 * MAX_N_ELS
     rw_flag = cl.MemFlags.CL_MEM_READ_WRITE
     ctx.register_buffer("src", buf_size, rw_flag)
     ctx.register_buffer("dst", buf_size, rw_flag)
