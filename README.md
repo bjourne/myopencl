@@ -16,7 +16,7 @@ If you want a fully-featured binding use
     cd myopencl
     pip install -U . --break-system-packages
 
-You can use the installeed mcl-tool for diagnostics:
+It installes `mcl-tool` to be used for diagnostics:
 
     $ mcl-tool list-platforms
     ...

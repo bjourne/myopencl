@@ -68,6 +68,9 @@ class Context:
         return ev
 
     def register_program(self, pname, paths, opts):
+        """Since an OpenCL program can consist of multiple source
+        files, paths is a list of Path objects.
+        """
         dev_id = self.device_id
         ctx = self.context
 

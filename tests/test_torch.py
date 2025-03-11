@@ -94,7 +94,7 @@ def test_conv2d(platform_id, device_id):
         return
 
     path = Path("kernels/conv2d.cl")
-    c.register_program("conv2d", path, BUILD_OPTS)
+    c.register_program("conv2d", [path], BUILD_OPTS)
     c.register_queue("main", [])
 
     for d in CONV2D_SETUPS:
@@ -134,7 +134,7 @@ def test_conv2d_fix(platform_id, device_id):
         return
 
     path = Path("kernels/conv2d_fix.cl")
-    c.register_program("conv2d", path, BUILD_OPTS)
+    c.register_program("conv2d", [path], BUILD_OPTS)
     c.register_queue("main", [])
 
     for d in CONV2D_SETUPS:

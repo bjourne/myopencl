@@ -13,7 +13,7 @@ import myopencl as cl
 import numpy as np
 
 PAIRS = platform_device_pairs()
-VECADD = Path("kernels/vecadd.cl")
+VECADD_PROGRAM = [Path("kernels/vecadd.cl")]
 BUILD_OPTS = "-cl-std=CL2.0 -cl-unsafe-math-optimizations"
 
 def align_matrix(M, y_align, x_align):
@@ -69,7 +69,7 @@ def test_vecadd(platform_id, device_id):
     ev2 = cl.enqueue_fill_buffer(queue, mem_b, el_tp(2.5), 0, nbytes)
     cl.wait_for_events([ev1, ev2])
 
-    source = [VECADD.read_text("utf-8")]
+    source = [VECADD_PROGRAM[0].read_text("utf-8")]
     prog = cl.create_program_with_source(ctx, source)
     cl.build_program(prog, device_id, "-Werror -cl-std=CL2.0", True, True)
     kern = cl.create_kernel(prog, "vecadd")
@@ -125,9 +125,7 @@ def test_vecadd_objs(platform_id, device_id):
     write_numpy_array(c, "main", "A", A)
     write_numpy_array(c, "main", "B", B)
     c.register_output_buffer("C", A.nbytes)
-    c.register_program("vecadd", VECADD, BUILD_OPTS)
-
-
+    c.register_program("vecadd", VECADD_PROGRAM, BUILD_OPTS)
     c.run_kernel("main", "vecadd", "vecadd",
                  [n_els], None,
                  ["A", "B", "C"])
@@ -227,7 +225,7 @@ def test_matmul(platform_id, device_id):
         "-D TS_K=%d" % ts_k,
         "-D TS=%d" % 123
     ]
-    ctx.register_program("matmul", path, " ".join(opts))
+    ctx.register_program("matmul", [path], " ".join(opts))
     ctx.register_queue("main", [])
 
     # Setup data
@@ -339,7 +337,7 @@ def test_im2col(platform_id, device_id):
 
     Y = np.empty((n, k), dtype = np.float32)
     ctx.register_output_buffer("Y", Y.nbytes)
-    path = Path("kernels/matmul.cl")
+    path = [Path("kernels/matmul.cl")]
     ctx.register_program("matmul", path, " ".join(opts))
     for kname, gwork, lwork in matmuls:
         bef = time()
@@ -361,5 +359,4 @@ def test_buffer_names(platform_id, device_id):
     c.register_queue("main", [])
     ptr = np.ctypeslib.as_ctypes(x)
     c.write_buffer("main", (1, 2), x.nbytes, ptr)
-
     c.finish_and_release()
