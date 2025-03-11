@@ -6,18 +6,6 @@
 #define     BLOCK_M     (X_SCALE * V_SIZE)
 #define     BLOCK_K     (PE_S * PE_S)
 
-#define VECTOR_FLOAT1_ZERO          0.0f
-#define VECTOR_FLOAT2_ZERO          (float2)(0.0f, 0.0f)
-#define VECTOR_FLOAT4_ZERO          (float4)(0.0f, 0.0f, 0.0f, 0.0f)
-#define VECTOR_FLOAT8_ZERO          (float8)(VECTOR_FLOAT4_ZERO,VECTOR_FLOAT4_ZERO)
-#define VECTOR_FLOAT16_ZERO         (float16)(VECTOR_FLOAT8_ZERO,VECTOR_FLOAT8_ZERO)
-
-#define VECTOR_INT4_ZERO            (int4)(0, 0, 0, 0)
-#define VECTOR_INT8_ZERO            (int8)(VECTOR_INT4_ZERO, VECTOR_INT4_ZERO)
-
-#define VECTOR_LONG4_ZERO           (long4)(0, 0, 0, 0)
-#define VECTOR_LONG8_ZERO           (long8)(VECTOR_LONG4_ZERO, VECTOR_LONG4_ZERO)
-
 // Shift register size
 #define SHIFT_REG_SIZE              (PE_S * PE_S)
 
