@@ -178,7 +178,7 @@ def schedule_sa_matmul(mat_w, size_n, size_m, size_k, sa_dims):
          ("load_b", [mat_w, n_blocks, m_blocks, k_blocks]),
          ("store", ["dst", n_blocks, m_blocks, k_blocks])
          ],
-        [("postproc_c", ["src", "dst", size_n, size_k, n_blocks, k_blocks])]
+        [("postproc_c", ["src", "dst", size_n, size_k])]
     ], [size_n, size_k]
 
 def conv2d_to_cl(mod, x_shape, sa_dims):
@@ -238,7 +238,7 @@ def conv2d_to_cl(mod, x_shape, sa_dims):
          ("load_b", [w, n_blocks, m_blocks, k_blocks]),
          ("store", ["dst", n_blocks, m_blocks, k_blocks])
          ],
-        [("postproc_c", ["src", "dst", size_n, size_k, n_blocks, k_blocks])]
+        [("postproc_c", ["src", "dst", size_n, size_k])]
     ]
 
     if mod.bias is not None:
