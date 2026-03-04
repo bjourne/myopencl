@@ -131,6 +131,9 @@ cl_program_build_info = cl_uint
 cl_properties = cl_ulong
 cl_queue_properties = cl_properties
 
+class cl_version(cl_uint):
+    pass
+
 ########################################################################
 # Level 1: Enums
 ########################################################################
@@ -349,6 +352,9 @@ class PlatformInfo(InfoEnum):
     CL_PLATFORM_NAME = 0x0902, c_char_p
     CL_PLATFORM_VENDOR = 0x0903, c_char_p
     CL_PLATFORM_EXTENSIONS = 0x0904, c_char_p
+
+    # OpenCL 3.0
+    CL_PLATFORM_NUMERIC_VERSION = 0x0906, cl_version
 
 
 class ProgramInfo(InfoEnum):
@@ -741,7 +747,9 @@ def create_command_queue_with_properties(ctx, dev, lst):
             val = val.value
         props[i] = val
     props[-1] = 0
-    return check_last(so.clCreateCommandQueueWithProperties, ctx, dev, props)
+    return check_last(
+        so.clCreateCommandQueueWithProperties, ctx, dev, props
+    )
 
 
 def enqueue_nd_range_kernel(queue, kern, global_work, local_work):
@@ -755,7 +763,8 @@ def enqueue_nd_range_kernel(queue, kern, global_work, local_work):
     ev = cl_event()
     check(
         so.clEnqueueNDRangeKernel(
-            queue, kern, work_dim, None, gl_work, lo_work, 0, None, byref(ev)
+            queue, kern, work_dim, None,
+            gl_work, lo_work, 0, None, byref(ev)
         )
     )
     return ev
@@ -783,7 +792,8 @@ def enqueue_write_buffer(queue, mem, blocking_write, offset, size, ptr):
     ev = cl_event()
     check(
         so.clEnqueueWriteBuffer(
-            queue, mem, blocking_write, offset, size, ptr, 0, None, byref(ev)
+            queue, mem, blocking_write, offset,
+            size, ptr, 0, None, byref(ev)
         )
     )
     return ev
@@ -792,7 +802,8 @@ def enqueue_read_buffer(queue, mem, blocking_read, offset, size, ptr):
     ev = cl_event()
     check(
         so.clEnqueueReadBuffer(
-            queue, mem, blocking_read, offset, size, ptr, 0, None, byref(ev)
+            queue, mem, blocking_read, offset,
+            size, ptr, 0, None, byref(ev)
         )
     )
     return ev
@@ -808,7 +819,10 @@ def finish(queue):
 
 # Context
 def create_context(dev_id):
-    return check_last(so.clCreateContext, None, 1, byref(dev_id), None, None)
+    return check_last(
+        so.clCreateContext, None,
+        1, byref(dev_id), None, None
+    )
 
 
 # Device
@@ -839,12 +853,9 @@ def set_kernel_arg(kern, i, arg):
 def create_buffer(ctx, flags, n_bytes):
     return check_last(so.clCreateBuffer, ctx, flags.value, n_bytes, None)
 
-
 # Platform
 def get_platform_ids():
     return size_and_fill(so.clGetPlatformIDs, cl_uint, cl_platform_id)
-
-
 
 # Program
 def create_program_with_source(ctx, src):
@@ -852,7 +863,9 @@ def create_program_with_source(ctx, src):
     n = len(src)
     strings = (c_char_p * n)(*[s.encode("utf-8") for s in src])
     lengths = (c_size_t * n)(*[len(s) for s in src])
-    return check_last(so.clCreateProgramWithSource, ctx, n, strings, lengths)
+    return check_last(
+        so.clCreateProgramWithSource, ctx, n, strings, lengths
+    )
 
 def create_program_with_binary(ctx, dev, binary):
     lengths = (c_size_t * 1)(len(binary))

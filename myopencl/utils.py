@@ -1,4 +1,4 @@
-# Copyright (C) 2024 Björn A. Lindqvist
+# Copyright (C) 2024, 2026 Björn A. Lindqvist
 from enum import Enum
 from humanize import naturalsize
 from os import get_terminal_size
@@ -23,19 +23,22 @@ BYTE_INFO_LISTS = {
     cl.ProgramInfo.CL_PROGRAM_BINARY_SIZES
 }
 
-def pp_enum_val(wrapper, key, val):
-    if key in BYTE_INFOS:
-        val = naturalsize(val)
-    if key in BYTE_INFO_LISTS:
-        val = ', '.join(naturalsize(v) for v in val)
-    if isinstance(val, Enum):
-        val = val.name
-    if isinstance(val, str) and "\n" in val:
-        val = val.strip()
-        val = val.split("\n")
-    else:
-        val = [val]
+def prettify_info(k, v):
+    if k in BYTE_INFOS:
+        return [naturalsize(v)]
+    elif k in BYTE_INFO_LISTS:
+        return [', '.join(naturalsize(v0) for v0 in v)]
+    elif isinstance(v, Enum):
+        return [v.name]
+    elif isinstance(v, str) and "\n" in v:
+        return v.strip().split("\n")
+    elif k == cl.PlatformInfo.CL_PLATFORM_NUMERIC_VERSION:
+        tup = (v >> 22, (v >> 12) & 0x3ff, v & 0x3ff)
+        return [tup]
+    return [v]
 
+def pp_enum_val(wrapper, key, val):
+    val = prettify_info(key, val)
     base_fmt = f"%-{KEY_LEN}s: %s"
     s = base_fmt % (key.name, val[0])
     print(wrapper.fill(s))
@@ -50,7 +53,7 @@ def pp_dict(wrapper, d):
     print()
 
 def terminal_wrapper():
-    cols = get_terminal_size()[0] if stdout.isatty() else 72
+    cols = get_terminal_size()[0] if stdout.isatty() else 120
     return TextWrapper(width=cols - 4, subsequent_indent=INDENT_STR)
 
 def can_compile(device_id):
