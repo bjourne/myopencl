@@ -1,4 +1,4 @@
-# Copyright (C) 2024-2025 Björn A. Lindqvist <bjourne@gmail.com>
+# Copyright (C) 2024-2026 Björn A. Lindqvist <bjourne@gmail.com>
 from humanize import metric
 from myopencl.objs import Context
 from myopencl.utils import can_compile, is_gpu, platform_device_pairs
@@ -283,8 +283,10 @@ def test_im2col(platform_id, device_id):
     dx = (px - fx) // stride_x + 1
 
     # Generate data
-    W = np.arange(fy * fx * sc * dc, dtype = np.float32).reshape(fy * fx * sc, dc)
-    X = np.arange(n * sy * sx * sc, dtype = np.float32).reshape(n, sy, sx, sc)
+    W = np.arange(fy * fx * sc * dc, dtype = np.float32)
+    W = W.reshape(fy * fx * sc, dc)
+    X = np.arange(n * sy * sx * sc, dtype = np.float32)
+    X = X.reshape(n, sy, sx, sc)
     X = np.pad(X, [(0, 0), (pad_y, pad_y), (pad_x, pad_x), (0, 0)])
 
     # Im2col

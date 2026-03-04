@@ -234,6 +234,7 @@ class DeviceInfo(InfoEnum):
     CL_DEVICE_VENDOR = 0x102C, c_char_p
     CL_DRIVER_VERSION = 0x102D, c_char_p
     CL_DEVICE_PROFILE = 0x102E, c_char_p
+    CL_DEVICE_VERSION = 0x102F, c_char_p
     CL_DEVICE_PRINTF_BUFFER_SIZE = 0x1049, c_size_t
 
     CL_DEVICE_BUILT_IN_KERNELS = 0x103F, c_char_p
@@ -353,8 +354,13 @@ class PlatformInfo(InfoEnum):
     CL_PLATFORM_VENDOR = 0x0903, c_char_p
     CL_PLATFORM_EXTENSIONS = 0x0904, c_char_p
 
+    # OpenCL 2.1
+    CL_PLATFORM_HOST_TIMER_RESOLUTION = 0x0905, c_ulong
+
     # OpenCL 3.0
     CL_PLATFORM_NUMERIC_VERSION = 0x0906, cl_version
+
+    CL_PLATFORM_ICD_SUFFIX_KHR = 0x0920, c_char_p
 
 
 class ProgramInfo(InfoEnum):
