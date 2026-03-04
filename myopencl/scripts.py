@@ -1,4 +1,4 @@
-# Copyright (C) 2024-2025 Björn A. Lindqvist <bjourne@gmail.com>
+# Copyright (C) 2024-2026 Björn A. Lindqvist <bjourne@gmail.com>
 from myopencl.objs import Context
 from myopencl.utils import INDENT_STR, pp_dict, terminal_wrapper
 from pathlib import Path
@@ -145,7 +145,14 @@ def build_program(filename, platform_index, includes, defines):
     nargs = -1,
     required = 1
 )
-def benchmark_kernel(platform_index, includes, defines, filename, kernel, arguments):
+def benchmark_kernel(
+        platform_index,
+        includes,
+        defines,
+        filename,
+        kernel,
+        arguments
+):
     """
     Load the OpenCL program in FILENAME and run KERNEL with specified
     ARGUMENTS

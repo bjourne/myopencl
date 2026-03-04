@@ -1,4 +1,4 @@
-# Copyright (C) 2024-2025 Björn A. Lindqvist <bjourne@gmail.com>
+# Copyright (C) 2024-2026 Björn A. Lindqvist <bjourne@gmail.com>
 from ctypes import *
 from enum import Enum, Flag, IntEnum
 
@@ -255,7 +255,6 @@ class DeviceType(Enum):
     CL_DEVICE_TYPE_CUSTOM = 1 << 4
     CL_DEVICE_TYPE_ALL = 0xFFFFFFFF
 
-
 class ErrorCode(Enum):
     CL_SUCCESS = 0
     CL_DEVICE_NOT_FOUND = -1
@@ -299,6 +298,11 @@ class ErrorCode(Enum):
     CL_INVALID_BUFFER_SIZE = -61
     CL_INVALID_MIP_LEVEL = -62
     CL_INVALID_GLOBAL_WORK_SIZE = -63
+    # Error codes from CL/cl_ext.h
+    CL_PLATFORM_NOT_FOUND_KHR = -1001
+    CL_INVALID_COMMAND_BUFFER_KHR = -1138
+    CL_INVALID_SYNC_POINT_WAIT_LIST_KHR = -1139
+    CL_INCOMPATIBLE_COMMAND_QUEUE_KHR = -1140
 
 class EventInfo(InfoEnum):
     CL_EVENT_COMMAND_QUEUE = 0x11D0, cl_command_queue
