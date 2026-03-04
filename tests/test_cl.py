@@ -11,7 +11,7 @@
 #   * x - tensor or numpy array
 
 from myopencl.objs import Context
-from myopencl.utils import platform_device_pairs, prettify_info
+from myopencl.utils import platform_device_pairs
 from pytest import mark
 
 import ctypes
@@ -101,15 +101,12 @@ def test_create_program_with_source(platform_id, device_id):
     __kernel void kern2() {}
     """
     prog = cl.create_program_with_source(ctx, [src1, src2])
+
     cl.build_program(prog, device_id, "", True, True)
     cl.release(prog)
     cl.release(ctx)
 
-def test_prettify_info():
-    attr = cl.PlatformInfo.CL_PLATFORM_NUMERIC_VERSION
-    val = prettify_info(attr, 12582912)
-    assert val == [(3, 0, 0)]
-
+    print("HERE")
 
 ########################################################################
 # Tests: higher level

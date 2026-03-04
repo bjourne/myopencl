@@ -20,7 +20,7 @@ It installes `mcl-tool` to be used for diagnostics:
 
     $ mcl-tool list-platforms
     ...
-    $ mcl-tool build-kernel kernel/path.cl
+    $ mcl-tool build-program kernel/path.cl
 
 ## Unit tests
 

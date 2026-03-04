@@ -69,3 +69,12 @@ def platform_device_pairs():
     for p in cl.get_platform_ids():
         s.extend((p, d) for d in cl.get_device_ids(p))
     return s
+
+def format_opts(includes, defines):
+    includes = [f"-I {ip}" for ip in includes]
+    defines = [f"-D {kv}" for kv in defines]
+    opts = [
+        "-cl-std=CL2.0",
+        "-cl-kernel-arg-info"
+    ] + includes + defines
+    return " ".join(opts)

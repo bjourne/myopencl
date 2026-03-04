@@ -1,20 +1,12 @@
 # Copyright (C) 2024-2026 Björn A. Lindqvist <bjourne@gmail.com>
 from myopencl.objs import Context
-from myopencl.utils import INDENT_STR, pp_dict, terminal_wrapper
+from myopencl.utils import (
+    INDENT_STR, format_opts, pp_dict, terminal_wrapper
+)
 from pathlib import Path
 
 import click
 import myopencl as cl
-
-def format_opts(includes, defines):
-    includes = [f"-I {ip}" for ip in includes]
-    defines = [f"-D {kv}" for kv in defines]
-    opts = [
-        "-cl-std=CL2.0",
-        "-cl-kernel-arg-info"
-    ] + includes + defines
-    return " ".join(opts)
-
 
 @click.group(
     invoke_without_command = True,
@@ -91,7 +83,7 @@ def build_program(filename, platform_index, includes, defines):
     else:
         prog = cl.create_program_with_binary(ctx, dev, data)
     opts = format_opts(includes, defines)
-    cl.build_program(prog, dev, " ".join(opts), True, True)
+    cl.build_program(prog, dev, opts, True, True)
 
     wrap = terminal_wrapper()
     pp_dict(wrap, cl.get_details(ctx))
