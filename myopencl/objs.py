@@ -1,4 +1,4 @@
-# Copyright (C) 2024-2025 Björn A. Lindqvist <bjourne@gmail.com>
+# Copyright (C) 2024-2026 Björn A. Lindqvist <bjourne@gmail.com>
 
 # Names:
 #   * c - Context
@@ -57,6 +57,9 @@ class Context:
         self.buffers[name] = buf
 
     def register_input_buffer(self, qname, bname, nbytes, cptr):
+        """Creates a named read only buffer and initializes it with
+        nbytes bytes of input data.
+        """
         self.register_buffer(bname, nbytes, MemFlags.CL_MEM_READ_ONLY)
         return self.write_buffer(qname, bname, nbytes, cptr)
 
