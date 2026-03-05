@@ -61,9 +61,13 @@ def test_vecadd(platform_id, device_id):
     n_els = 10 * 1000 * 1024
     el_size = ctypes.sizeof(el_tp)
     nbytes = n_els * el_size
-    mem_a = cl.create_buffer(ctx, cl.MemFlags.CL_MEM_READ_ONLY, nbytes)
-    mem_b = cl.create_buffer(ctx, cl.MemFlags.CL_MEM_READ_ONLY, nbytes)
-    mem_c = cl.create_buffer(ctx, cl.MemFlags.CL_MEM_WRITE_ONLY, nbytes)
+
+    ro_flag = cl.MemFlags.CL_MEM_READ_ONLY
+    wo_flag = cl.MemFlags.CL_MEM_WRITE_ONLY
+
+    mem_a = cl.create_buffer(ctx, ro_flag, nbytes)
+    mem_b = cl.create_buffer(ctx, ro_flag, nbytes)
+    mem_c = cl.create_buffer(ctx, wo_flag, nbytes)
 
     ev1 = cl.enqueue_fill_buffer(queue, mem_a, el_tp(1.5), 0, nbytes)
     ev2 = cl.enqueue_fill_buffer(queue, mem_b, el_tp(2.5), 0, nbytes)

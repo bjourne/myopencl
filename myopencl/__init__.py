@@ -423,6 +423,8 @@ INVALID_INFO = {
 OPTIONAL_INFO = {
     ErrorCode.CL_INVALID_VALUE : {
         CommandQueueInfo.CL_QUEUE_SIZE : 0,
+        PlatformInfo.CL_PLATFORM_HOST_TIMER_RESOLUTION : None,
+        PlatformInfo.CL_PLATFORM_NUMERIC_VERSION : None,
         ProgramInfo.CL_PROGRAM_BINARIES : None,
         ProgramInfo.CL_PROGRAM_SOURCE : None
     },
