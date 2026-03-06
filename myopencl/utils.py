@@ -1,4 +1,4 @@
-# Copyright (C) 2024, 2026 Björn A. Lindqvist
+# Copyright (C) 2024, 2026 Björn A. Lindqvist <bjourne@gmail.com>
 from enum import Enum
 from humanize import naturalsize
 from os import get_terminal_size
@@ -33,8 +33,9 @@ def prettify_info(k, v):
     elif isinstance(v, str) and "\n" in v:
         return v.strip().split("\n")
     elif k == cl.PlatformInfo.CL_PLATFORM_NUMERIC_VERSION:
-        tup = (v >> 22, (v >> 12) & 0x3ff, v & 0x3ff)
-        return [tup]
+        if v is not None:
+            v = (v >> 22, (v >> 12) & 0x3ff, v & 0x3ff)
+        return [v]
     return [v]
 
 def pp_enum_val(wrapper, key, val):
