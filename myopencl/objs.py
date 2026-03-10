@@ -135,7 +135,7 @@ class Context:
         for cl_obj in cl_objs:
             cl.release(cl_obj)
 
-    # Kernel intraction
+    # Kernel interaction
     def enqueue_kernel(self, qname, pname, kname, gl_work, lo_work):
         q = self.queues[qname]
         k = self.kernels[pname][kname]

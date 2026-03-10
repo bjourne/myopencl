@@ -8,6 +8,11 @@ from pathlib import Path
 import click
 import myopencl as cl
 
+COMPILER_FLAGS = [
+    "-cl-std=CL2.0",
+    "-cl-kernel-arg-info"
+]
+
 @click.group(
     invoke_without_command = True,
     no_args_is_help=True
@@ -82,7 +87,7 @@ def build_program(filename, platform_index, includes, defines):
         prog = cl.create_program_with_source(ctx, src)
     else:
         prog = cl.create_program_with_binary(ctx, dev, data)
-    opts = format_opts(includes, defines)
+    opts = format_opts(COMPILER_FLAGS, includes, defines)
     cl.build_program(prog, dev, opts, True, True)
 
     wrap = terminal_wrapper()
@@ -152,7 +157,7 @@ def benchmark_kernel(
     from myopencl import so
     ctx = Context.from_indexes(platform_index, 0)
     paths = [Path(filename)]
-    opts = format_opts(includes, defines)
+    opts = format_opts(COMPILER_FLAGS, includes, defines)
     ctx.register_program("main", paths, opts)
     props = [
         cl.CommandQueueInfo.CL_QUEUE_PROPERTIES,

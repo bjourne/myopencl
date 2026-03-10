@@ -9,5 +9,5 @@ def test_prettify_info():
     assert val == [(3, 0, 0)]
 
 def test_format_opts():
-    s = format_opts([], [])
+    s = format_opts([], [], [])
     assert isinstance(s, str)
